@@ -19,34 +19,54 @@
 
 static int VERBOSE = 0;
 
+// Must be a power of 2
+static constexpr intptr_t MaxObjectSize = 1ULL << 32;
+
+static constexpr intptr_t PtrInObjMask = MaxObjectSize - 1;
+static constexpr intptr_t ObjIdxMask = ~(PtrInObjMask);
+
 static void *advance(void *Ptr, uint64_t Bytes) {
   return reinterpret_cast<char *>(Ptr) + Bytes;
 }
 
 struct ObjectTy {
-  ObjectTy(void *Data, uint64_t Size, bool Artifical = true)
-      : Idx(getObjIdx()), Size(Size), Data(Data) {}
-  ObjectTy(const ObjectTy &Other)
-      : Idx(Other.Idx), Size(Other.Size), Data(Other.Data) {}
+  ObjectTy(size_t Idx, bool Artificial = true) : Idx(Idx) {}
 
-  uint64_t getSize() const { return Size; }
+  uintptr_t getSize() const { return Size; }
   void *begin() { return Data; }
   void *end() { return advance(Data, Size); }
-  static int32_t getObjIdx() {
-    static int32_t ObjIdxCnt = 0;
-    return ++ObjIdxCnt;
+  bool isInitialized(intptr_t Offset, uint32_t Size) {
+    for (unsigned It = 0; It < Size; It++)
+      if (!Initialized[AllocationOffset + Offset])
+        return false;
+    return true;
+  }
+  void *getBasePtr() { return reinterpret_cast<void *>(MaxObjectSize / 2); }
+  template <typename T> T read(void *Ptr, uint32_t Size) {
+    intptr_t Offset = reinterpret_cast<intptr_t>(Ptr) - reinterpret_cast<intptr_t>(getBasePtr());
+    if (isInitialized(Offset, Size)) {
+      T *Ptr = reinterpret_cast<T *>(Output[AllocationOffset + Offset]);
+      return *Ptr;
+    }
+    if (!Output) {
+    }
+
+    return *reinterpret_cast<T *>(Ptr);
   }
 
-  const uint32_t Idx;
+  const size_t Idx;
 
 private:
-  uint64_t Size = 0;
-  void *Data = nullptr;
-};
-struct ObjectCmpTy {
-  bool operator()(const ObjectTy *LHS, const ObjectTy *RHS) const {
-    return LHS->Idx < RHS->Idx;
-  };
+  uintptr_t Size = 0;
+  intptr_t AllocationOffset = 0;
+  void *Output = nullptr;
+  void *Input = nullptr;
+  uint8_t *Initialized = nullptr;
+
+  void reallocateData(uintptr_t NewSize, intptr_t NewAllocationOffset) {
+    assert(Size < NewSize);
+    void *NewOutput = malloc(NewSize);
+  }
 };
 
 struct ArgTy {
@@ -135,7 +155,7 @@ struct InputGenRTTy {
   InputGenRTTy(const char *ExecPath, const char *OutputDir,
                const char *FuncIdent, int Seed)
       : Seed(Seed), FuncIdent(FuncIdent), OutputDir(OutputDir),
-        ExecPath(ExecPath), Heap(new HeapTy()) {
+        ExecPath(ExecPath) {
     Gen.seed(Seed);
     SeedStub = rand(false);
     GenStub.seed(SeedStub);
@@ -155,29 +175,10 @@ struct InputGenRTTy {
 
   int rand(bool Stub) { return Stub ? Rand(GenStub) : Rand(Gen); }
 
-  static ObjectTy *getNewObjImpl(uint64_t Size, bool Artifical,
-                                 ObjectTy *&LastObj, HeapTy *&Heap) {
-    int64_t AlignedSize = Size + (-Size & (16 - 1));
-    if (VERBOSE)
-      printf("Get new obj %lu :: %lu\n", Size, AlignedSize);
-    void *Loc;
-    if (LastObj && advance(LastObj->end(), AlignedSize) < Heap->end()) {
-      Loc = LastObj->end();
-    } else {
-      if (LastObj)
-        Heap = new HeapTy(Heap);
-      Loc = Heap->begin();
-    }
-    LastObj = new ObjectTy(Loc, AlignedSize, Artifical);
-    if (VERBOSE)
-      printf("Obj %p :: %p\n", LastObj->begin(), LastObj->end());
-    return LastObj;
-  }
-
-  ObjectTy *getNewObj(uint64_t Size, bool Artifical) {
-    auto *Obj = getNewObjImpl(Size, Artifical, LastObj, Heap);
-    Objects.insert(Obj);
-    return Obj;
+  size_t getNewObj(uint64_t Size, bool Artifical) {
+    size_t Idx = Objects.size();
+    Objects.push_back(std::make_unique<ObjectTy>(Idx, /*Artificial=*/true));
+    return Idx;
   }
 
   template <typename T>
@@ -187,17 +188,36 @@ struct InputGenRTTy {
     return V;
   }
 
+  void *localPtrToGlobalPtr(size_t ObjIdx, void *PtrInObj) {
+    return reinterpret_cast<void *>((ObjIdx * MaxObjectSize) |
+                                    reinterpret_cast<intptr_t>(PtrInObj));
+  }
+
+  ObjectTy *globalPtrToObj(void *GlobalPtr) {
+    size_t Idx =
+        (reinterpret_cast<intptr_t>(GlobalPtr) & ObjIdxMask) / MaxObjectSize;
+    assert(Idx >= 0 && Idx < Objects.size());
+    return Objects[Idx].get();
+  }
+
+  void *globalPtrToLocalPtr(void *GlobalPtr) {
+    return reinterpret_cast<void *>(reinterpret_cast<intptr_t>(GlobalPtr) &
+                                    PtrInObjMask);
+  }
+
   template <> void *getNewValue<void *>(int32_t *ObjIdx, bool Stub, int Max) {
     NumNewValues++;
-    memset(Storage, 0, 64);
     if (rand(Stub) % 50) {
-      ObjectTy *Obj = getNewObj(1024 * 1024, true);
-      if (ObjIdx)
-        *ObjIdx = Obj->Idx;
-      *reinterpret_cast<void **>(Storage) = Obj->begin();
+      size_t ObjIdx = getNewObj(1024 * 1024, true);
+      return localPtrToGlobalPtr(ObjIdx, Objects[ObjIdx]->getBasePtr());
+    } else {
+      return nullptr;
     }
-    void *V = *((void **)(Storage));
-    return V;
+  }
+
+  template <typename T> T read(void *Ptr, void *Base, uint32_t Size) {
+    ObjectTy *Obj = globalPtrToObj(Ptr);
+    return Obj->read<T>(globalPtrToLocalPtr(Ptr));
   }
 
   void registerGlobal(void *Global, void **ReplGlobal, int32_t GlobalSize) {
@@ -212,14 +232,13 @@ struct InputGenRTTy {
   std::vector<ObjectTy *> Globals;
 
   uint64_t NumNewValues = 0;
-  char Storage[64];
 
   std::vector<ArgTy> Args;
 
-  ObjectTy *LastObj = 0;
-  std::set<ObjectTy *, ObjectCmpTy> Objects;
-
-  HeapTy *Heap;
+  std::set<ObjectTy *> ObjectsBak;
+  // Storage for dynamic objects, TODO maybe we should introduce a static size
+  // object type for when we know the size from static analysis.
+  std::vector<std::unique_ptr<ObjectTy>> Objects;
 
   void report() {
     if (OutputDir == "-") {
@@ -259,7 +278,7 @@ struct InputGenRTTy {
     fprintf(ReportOut, "Num new values: %lu\n", NumNewValues);
     fprintf(ReportOut, "Heap PtrMap: %lu\n", Heap->PtrMap.size());
     fprintf(ReportOut, "Heap ValMap: %lu\n", Heap->ValMap.size());
-    fprintf(ReportOut, "Objects (%zu total)\n", Objects.size());
+    fprintf(ReportOut, "Objects (%zu total)\n", ObjectsBak.size());
 
     writeSingleEl(InputOut, SeedStub);
 
@@ -267,12 +286,12 @@ struct InputGenRTTy {
     uint64_t TotalSize = 0;
     writeSingleEl(InputOut, TotalSize);
 
-    uint32_t NumObjects = Objects.size();
+    uint32_t NumObjects = ObjectsBak.size();
     writeSingleEl(InputOut, NumObjects);
 
     std::map<void *, ObjectTy *> TrimmedObjs;
     std::map<uint64_t, void *> Remap;
-    for (auto &It : Objects) {
+    for (auto &It : ObjectsBak) {
       auto *ObjLIt = It->begin();
       auto *ObjRIt = It->end();
       if (VERBOSE)
