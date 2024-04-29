@@ -31,11 +31,21 @@ static void *advance(void *Ptr, uint64_t Bytes) {
 
 struct ObjectTy {
   ObjectTy(size_t Idx, bool Artificial = true) : Idx(Idx) {}
+  ~ObjectTy() {
+    free(Output);
+    free(Input);
+    free(Initialized);
+  }
 
   uintptr_t getSize() const { return AllocationSize; }
   void *begin() { return Input; }
   void *end() { return advance(Input, AllocationSize); }
   void *getBasePtr() { return reinterpret_cast<void *>(MaxObjectSize / 2); }
+  void *getRealPtr(void *Ptr) {
+    intptr_t Offset = reinterpret_cast<intptr_t>(Ptr) -
+                      reinterpret_cast<intptr_t>(getBasePtr());
+    return advance(Output, Offset - AllocationOffset);
+  }
 
   /// Returns true if it was already allocated
   bool ensureAllocation(intptr_t Offset, uint32_t Size) {
@@ -77,7 +87,7 @@ private:
   bool isInitialized(intptr_t Offset, uint32_t Size) {
     assert(isAllocated(Offset, Size));
     for (unsigned It = 0; It < Size; It++)
-      if (!Initialized[AllocationOffset + Offset])
+      if (!Initialized[Offset - AllocationOffset])
         return false;
     return true;
   }
@@ -92,9 +102,9 @@ private:
     for (unsigned It = 0; It < sizeof(Val); It++) {
       if (!isInitialized(Offset + It, 1)) {
         uint8_t *OutputLoc = reinterpret_cast<uint8_t *>(
-            advance(Output, AllocationOffset + Offset + It));
+            advance(Output, -AllocationOffset + Offset + It));
         uint8_t *InputLoc = reinterpret_cast<uint8_t *>(
-            advance(Input, AllocationOffset + Offset + It));
+            advance(Input, -AllocationOffset + Offset + It));
         *OutputLoc = Bytes[It];
         *InputLoc = Bytes[It];
       }
@@ -238,10 +248,14 @@ struct InputGenRTTy {
     NumNewValues++;
     if (rand(Stub) % 50) {
       size_t ObjIdx = getNewObj(1024 * 1024, true);
-      return localPtrToGlobalPtr(ObjIdx, Objects[ObjIdx]->getBasePtr());
-    } else {
-      return nullptr;
+      void *Ptr = localPtrToGlobalPtr(ObjIdx, Objects[ObjIdx]->getBasePtr());
+      if (VERBOSE)
+        printf("New Obj at ptr %p\n", Ptr);
+      return Ptr;
     }
+    if (VERBOSE)
+      printf("New Obj = nullptr\n");
+    return nullptr;
   }
 
   template <typename T> void write(void *Ptr, T Val, uint32_t Size) {
@@ -263,13 +277,17 @@ struct InputGenRTTy {
     *ReplGlobal = localPtrToGlobalPtr(Idx, Objects[Idx]->getBasePtr());
   }
 
+  void *translatePtr(void *GlobalPtr) {
+    return globalPtrToObj(GlobalPtr)->getRealPtr(
+        globalPtrToLocalPtr(GlobalPtr));
+  }
+
   std::vector<size_t> Globals;
 
   uint64_t NumNewValues = 0;
 
   std::vector<ArgTy> Args;
 
-  std::set<ObjectTy *> ObjectsBak;
   // Storage for dynamic objects, TODO maybe we should introduce a static size
   // object type for when we know the size from static analysis.
   std::vector<std::unique_ptr<ObjectTy>> Objects;
@@ -441,7 +459,7 @@ template <typename T> T ObjectTy::read(void *Ptr, uint32_t Size) {
   bool WasAllocated = ensureAllocation(Offset, Size);
 
   T *OutputLoc =
-      reinterpret_cast<T *>(advance(Output, AllocationOffset + Offset));
+      reinterpret_cast<T *>(advance(Output, -AllocationOffset + Offset));
   if (WasAllocated && isInitialized(Offset, Size))
     return *OutputLoc;
 
@@ -582,6 +600,10 @@ ARG(void *, ptr)
 ARG(__int128, i128)
 ARG(long double, x86_fp80)
 #undef ARG
+
+void *__inputgen_translate_ptr(void *Ptr) {
+  return getInputGenRT().translatePtr(Ptr);
+}
 
 void free(void *) {}
 }

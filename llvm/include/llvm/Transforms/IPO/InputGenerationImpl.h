@@ -55,6 +55,7 @@ struct InterestingMemoryAccess {
   Type *AccessTy;
   Value *V = nullptr;
   Value *MaybeMask = nullptr;
+  unsigned AddrOperandNo = 0;
 
   enum KindTy { READ, WRITE, READ_THEN_WRITE, Last = READ_THEN_WRITE } Kind;
 
@@ -105,6 +106,7 @@ public:
                                 Type *AccessTy, int32_t AllocSize,
                                 InterestingMemoryAccess::KindTy Kind,
                                 Value *Object);
+  Value *emitTranslatePtrCall(IRBuilderBase &IRB, Value *Addr);
   void instrumentMaskedLoadOrStore(const InterestingMemoryAccess &Access,
                                    const DataLayout &DL);
   void instrumentMemIntrinsic(MemIntrinsic *MI);
@@ -135,6 +137,7 @@ public:
 private:
   DenseMap<Type *, FunctionCallee> InputGenMemoryAccessCallback;
   DenseMap<Type *, FunctionCallee> ValueGenCallback;
+  FunctionCallee InputGenTranslatePtr;
 
   FunctionCallee InputGenMemmove, InputGenMemcpy, InputGenMemset;
 };

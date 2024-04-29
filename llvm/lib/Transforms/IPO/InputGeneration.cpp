@@ -168,21 +168,25 @@ InputGenInstrumenter::isInterestingMemoryAccess(Instruction *I) const {
     Access.Kind = InterestingMemoryAccess::READ;
     Access.AccessTy = LI->getType();
     Access.Addr = LI->getPointerOperand();
+    Access.AddrOperandNo = 0;
   } else if (StoreInst *SI = dyn_cast<StoreInst>(I)) {
     Access.Kind = InterestingMemoryAccess::WRITE;
     Access.V = SI->getValueOperand();
     Access.AccessTy = SI->getValueOperand()->getType();
     Access.Addr = SI->getPointerOperand();
+    Access.AddrOperandNo = 0;
   } else if (AtomicRMWInst *RMW = dyn_cast<AtomicRMWInst>(I)) {
     Access.Kind = InterestingMemoryAccess::READ_THEN_WRITE;
     Access.V = RMW->getValOperand();
     Access.AccessTy = RMW->getValOperand()->getType();
     Access.Addr = RMW->getPointerOperand();
+    Access.AddrOperandNo = 0;
   } else if (AtomicCmpXchgInst *XCHG = dyn_cast<AtomicCmpXchgInst>(I)) {
     Access.Kind = InterestingMemoryAccess::READ_THEN_WRITE;
     Access.V = XCHG->getCompareOperand();
     Access.AccessTy = XCHG->getCompareOperand()->getType();
     Access.Addr = XCHG->getPointerOperand();
+    Access.AddrOperandNo = 0;
   } else if (auto *CI = dyn_cast<CallInst>(I)) {
     auto *F = CI->getCalledFunction();
     if (F && (F->getIntrinsicID() == Intrinsic::masked_load ||
@@ -202,6 +206,7 @@ InputGenInstrumenter::isInterestingMemoryAccess(Instruction *I) const {
       Access.MaybeMask = CI->getOperand(2 + OpOffset);
       Access.Addr = BasePtr;
     }
+    Access.AddrOperandNo = 0;
   }
 
   if (!Access.Addr)
@@ -323,6 +328,16 @@ void InputGenInstrumenter::instrumentAddress(
     emitMemoryAccessCallback(IRB, Access.Addr, Access.V, Access.AccessTy,
                              AllocSize, Access.Kind, Object);
   }
+  Access.I->setOperand(Access.AddrOperandNo,
+                       emitTranslatePtrCall(IRB, Access.Addr));
+}
+
+Value *InputGenInstrumenter::emitTranslatePtrCall(IRBuilderBase &IRB,
+                                                  Value *Addr) {
+
+  auto Fn = InputGenTranslatePtr;
+  assert(Fn.getCallee());
+  return IRB.CreateCall(Fn, {Addr});
 }
 
 void InputGenInstrumenter::emitMemoryAccessCallback(
@@ -571,6 +586,9 @@ void InputGenInstrumenter::initializeCallbacks(Module &M) {
       M.getOrInsertFunction(Prefix + "memcpy", PtrTy, PtrTy, PtrTy, Int64Ty);
   InputGenMemset =
       M.getOrInsertFunction(Prefix + "memset", PtrTy, PtrTy, Int8Ty, Int64Ty);
+
+  InputGenTranslatePtr =
+      M.getOrInsertFunction(Prefix + "translate_ptr", PtrTy, PtrTy);
 }
 
 void InputGenInstrumenter::stubDeclarations(Module &M, TargetLibraryInfo &TLI) {

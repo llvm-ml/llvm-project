@@ -326,7 +326,7 @@ public:
     if (ClCompileInputGenExecutables) {
       outs() << "Compiling " << ExecutableName << "\n";
       SmallVector<StringRef, 10> Args = {
-          Clang,       "-fopenmp", "-O2", "-ldl",        "-rdynamic",
+          Clang,       "-fopenmp", "-O0", "-ldl",        "-rdynamic",
           RuntimeName, ModuleName, "-o",  ExecutableName};
       if (ClDebug)
         Args.push_back("-g");
