@@ -29,6 +29,10 @@ static void *advance(void *Ptr, uint64_t Bytes) {
   return reinterpret_cast<char *>(Ptr) + Bytes;
 }
 
+static intptr_t diff(void *LHS, void *RHS) {
+  return reinterpret_cast<char *>(LHS) - reinterpret_cast<char *>(RHS);
+}
+
 struct ObjectTy {
   ObjectTy(size_t Idx, bool Artificial = true) : Idx(Idx) {}
   ~ObjectTy() {
@@ -40,19 +44,15 @@ struct ObjectTy {
   uintptr_t getSize() const { return AllocationSize; }
   void *begin() { return Input; }
   void *end() { return advance(Input, AllocationSize); }
+  bool isUsed(void *Ptr, uint32_t Size) {
+    return isInitialized(diff(Ptr, Input), Size);
+  }
+
   void *getBasePtr() { return reinterpret_cast<void *>(MaxObjectSize / 2); }
   void *getRealPtr(void *Ptr) {
     intptr_t Offset = reinterpret_cast<intptr_t>(Ptr) -
                       reinterpret_cast<intptr_t>(getBasePtr());
     return advance(Output, Offset - AllocationOffset);
-  }
-
-  /// Returns true if it was already allocated
-  bool ensureAllocation(intptr_t Offset, uint32_t Size) {
-    if (isAllocated(Offset, Size))
-      return true;
-    reallocateData(Offset, Size);
-    return false;
   }
 
   template <typename T> T read(void *Ptr, uint32_t Size);
@@ -76,12 +76,12 @@ private:
   // TODO make this a bit-vector
   uint8_t *Initialized = nullptr;
 
-  bool isAllocated(intptr_t Offset, uint32_t Size) {
-    intptr_t AllocatedMemoryStartOffset = AllocationOffset;
-    intptr_t AllocatedMemoryEndOffset =
-        AllocatedMemoryStartOffset + AllocationSize;
-    return (AllocatedMemoryStartOffset <= Offset &&
-            AllocatedMemoryEndOffset > Offset + Size);
+  /// Returns true if it was already allocated
+  bool ensureAllocation(intptr_t Offset, uint32_t Size) {
+    if (isAllocated(Offset, Size))
+      return true;
+    reallocateData(Offset, Size);
+    return false;
   }
 
   bool isInitialized(intptr_t Offset, uint32_t Size) {
@@ -90,6 +90,14 @@ private:
       if (!Initialized[Offset - AllocationOffset])
         return false;
     return true;
+  }
+
+  bool isAllocated(intptr_t Offset, uint32_t Size) {
+    intptr_t AllocatedMemoryStartOffset = AllocationOffset;
+    intptr_t AllocatedMemoryEndOffset =
+        AllocatedMemoryStartOffset + AllocationSize;
+    return (AllocatedMemoryStartOffset <= Offset &&
+            AllocatedMemoryEndOffset > Offset + Size);
   }
 
   template <typename T>
@@ -328,123 +336,122 @@ struct InputGenRTTy {
     for (size_t I = 0; I < Args.size(); ++I)
       fprintf(ReportOut, "Arg %zu: %p\n", I, (void *)Args[I].Content);
     fprintf(ReportOut, "Num new values: %lu\n", NumNewValues);
-    // fprintf(ReportOut, "Heap PtrMap: %lu\n", Heap->PtrMap.size());
-    // fprintf(ReportOut, "Heap ValMap: %lu\n", Heap->ValMap.size());
-    // fprintf(ReportOut, "Objects (%zu total)\n", ObjectsBak.size());
+    fprintf(ReportOut, "Heap PtrMap: %lu\n", Heap->PtrMap.size());
+    fprintf(ReportOut, "Heap ValMap: %lu\n", Heap->ValMap.size());
+    fprintf(ReportOut, "Objects (%zu total)\n", Objects.size());
 
-    // writeSingleEl(InputOut, SeedStub);
+    writeSingleEl(InputOut, SeedStub);
 
-    // auto BeforeTotalSize = InputOut.tellp();
-    // uint64_t TotalSize = 0;
-    // writeSingleEl(InputOut, TotalSize);
+    auto BeforeTotalSize = InputOut.tellp();
+    uint64_t TotalSize = 0;
+    writeSingleEl(InputOut, TotalSize);
 
-    // uint32_t NumObjects = ObjectsBak.size();
-    // writeSingleEl(InputOut, NumObjects);
+    uint32_t NumObjects = ObjectsBak.size();
+    writeSingleEl(InputOut, NumObjects);
 
-    // std::map<void *, ObjectTy *> TrimmedObjs;
-    // std::map<uint64_t, void *> Remap;
-    // for (auto &It : ObjectsBak) {
-    //   auto *ObjLIt = It->begin();
-    //   auto *ObjRIt = It->end();
-    //   if (VERBOSE)
-    //     printf("%p : %p :: %lu\n", ObjLIt, ObjRIt, It->getSize());
-    //   while (ObjRIt != ObjLIt) {
-    //     if (Heap->isUsed(ObjLIt, 1))
-    //       break;
-    //     ObjLIt = advance(ObjLIt, 1);
-    //   }
-    //   if (VERBOSE)
-    //     printf("%p : %p\n", ObjLIt, ObjRIt);
-    //   while (ObjRIt != ObjLIt) {
-    //     if (Heap->isUsed(advance(ObjRIt, -1), 1))
-    //       break;
-    //     ObjRIt = advance(ObjRIt, -1);
-    //   }
-    //   uint64_t Size =
-    //       reinterpret_cast<char *>(ObjRIt) - reinterpret_cast<char
-    //       *>(ObjLIt);
-    //   if (VERBOSE)
-    //     printf("Size %lu\n", Size);
+    std::map<void *, ObjectTy *> TrimmedObjs;
+    std::map<uint64_t, void *> Remap;
+    for (auto &It : Objects) {
+      auto *ObjLIt = It->begin();
+      auto *ObjRIt = It->end();
+      if (VERBOSE)
+        printf("%p : %p :: %lu\n", ObjLIt, ObjRIt, It->getSize());
+      while (ObjRIt != ObjLIt) {
+        if (It->isUsed(ObjLIt, 1))
+          break;
+        ObjLIt = advance(ObjLIt, 1);
+      }
+      if (VERBOSE)
+        printf("%p : %p\n", ObjLIt, ObjRIt);
+      while (ObjRIt != ObjLIt) {
+        if (It->isUsed(advance(ObjRIt, -1), 1))
+          break;
+        ObjRIt = advance(ObjRIt, -1);
+      }
+      uint64_t Size =
+          reinterpret_cast<char *>(ObjRIt) - reinterpret_cast<char *>(ObjLIt);
+      if (VERBOSE)
+        printf("Size %lu\n", Size);
 
-    //   writeSingleEl(InputOut, It->Idx);
-    //   writeSingleEl(InputOut, TotalSize);
+      writeSingleEl(InputOut, It->Idx);
+      writeSingleEl(InputOut, TotalSize);
 
-    //   TotalSize += Size;
-    //   if (ObjLIt != ObjRIt)
-    //     TrimmedObjs[ObjLIt] = It;
-    // }
+      TotalSize += Size;
+      if (ObjLIt != ObjRIt)
+        TrimmedObjs[ObjLIt] = It.get();
+    }
 
-    // if (VERBOSE)
-    //   printf("TotalSize %lu\n", TotalSize);
-    // auto BeforeNumGlobals = InputOut.tellp();
-    // InputOut.seekp(BeforeTotalSize);
-    // writeSingleEl(InputOut, TotalSize);
-    // InputOut.seekp(BeforeNumGlobals);
+    if (VERBOSE)
+      printf("TotalSize %lu\n", TotalSize);
+    auto BeforeNumGlobals = InputOut.tellp();
+    InputOut.seekp(BeforeTotalSize);
+    writeSingleEl(InputOut, TotalSize);
+    InputOut.seekp(BeforeNumGlobals);
 
-    // uint32_t NumGlobals = Globals.size();
-    // writeSingleEl(InputOut, NumGlobals);
+    uint32_t NumGlobals = Globals.size();
+    writeSingleEl(InputOut, NumGlobals);
 
-    // for (uint32_t I = 0; I < NumGlobals; ++I) {
-    //   writeSingleEl(InputOut, Globals[I]->Idx);
-    // }
+    for (uint32_t I = 0; I < NumGlobals; ++I) {
+      writeSingleEl(InputOut, Globals[I]->Idx);
+    }
 
-    // // std::map<void *, std::pair<uintptr_t, uint32_t>> ValMap;
-    // auto End = TrimmedObjs.end();
-    // if (TrimmedObjs.empty() && !Heap->ValMap.empty()) {
-    //   printf("Problem, no objects!");
-    //   exit(2);
-    // }
+    // std::map<void *, std::pair<uintptr_t, uint32_t>> ValMap;
+    auto End = TrimmedObjs.end();
+    if (TrimmedObjs.empty() && !Heap->ValMap.empty()) {
+      printf("Problem, no objects!");
+      exit(2);
+    }
 
-    // uint32_t NumVals = Heap->ValMap.size();
-    // writeSingleEl(InputOut, NumVals);
+    uint32_t NumVals = Heap->ValMap.size();
+    writeSingleEl(InputOut, NumVals);
 
-    // for (auto &ValIt : Heap->ValMap) {
-    //   auto It = TrimmedObjs.upper_bound(ValIt.first);
-    //   if (It == TrimmedObjs.begin()) {
-    //     printf("Problem, it is begin()");
-    //     exit(3);
-    //   }
-    //   --It;
-    //   ptrdiff_t Offset = reinterpret_cast<char *>(ValIt.first) -
-    //                      reinterpret_cast<char *>(It->second->begin());
-    //   assert(Offset >= 0);
-    //   writeSingleEl(InputOut, It->second->Idx);
-    //   writeSingleEl(InputOut, Offset);
-    //   auto PtrIt = Heap->PtrMap.find(ValIt.first);
+    for (auto &ValIt : Heap->ValMap) {
+      auto It = TrimmedObjs.upper_bound(ValIt.first);
+      if (It == TrimmedObjs.begin()) {
+        printf("Problem, it is begin()");
+        exit(3);
+      }
+      --It;
+      ptrdiff_t Offset = reinterpret_cast<char *>(ValIt.first) -
+                         reinterpret_cast<char *>(It->second->begin());
+      assert(Offset >= 0);
+      writeSingleEl(InputOut, It->second->Idx);
+      writeSingleEl(InputOut, Offset);
+      auto PtrIt = Heap->PtrMap.find(ValIt.first);
 
-    //   // Write the obj idx next if its a pointer or the value
-    //   enum Kind : uint32_t {
-    //     IDX = 0,
-    //     CONTENT = 1,
-    //   };
-    //   uintptr_t Content;
-    //   if (PtrIt != Heap->PtrMap.end()) {
-    //     writeSingleEl(InputOut, /* Enum */ Kind::IDX);
-    //     Content = PtrIt->second;
-    //   } else {
-    //     writeSingleEl(InputOut, /* Enum */ Kind::CONTENT);
-    //     Content = ValIt.second.first;
-    //   }
-    //   if (VERBOSE)
-    //     printf("%lu ---> %lu [%i]\n", Offset, Content,
-    //            (PtrIt == Heap->PtrMap.end()));
-    //   writeSingleEl(InputOut, Content);
-    //   // Write the size
-    //   writeSingleEl(InputOut, ValIt.second.second);
-    // }
+      // Write the obj idx next if its a pointer or the value
+      enum Kind : uint32_t {
+        IDX = 0,
+        CONTENT = 1,
+      };
+      uintptr_t Content;
+      if (PtrIt != Heap->PtrMap.end()) {
+        writeSingleEl(InputOut, /* Enum */ Kind::IDX);
+        Content = PtrIt->second;
+      } else {
+        writeSingleEl(InputOut, /* Enum */ Kind::CONTENT);
+        Content = ValIt.second.first;
+      }
+      if (VERBOSE)
+        printf("%lu ---> %lu [%i]\n", Offset, Content,
+               (PtrIt == Heap->PtrMap.end()));
+      writeSingleEl(InputOut, Content);
+      // Write the size
+      writeSingleEl(InputOut, ValIt.second.second);
+    }
 
-    // uint32_t NumArgs = Args.size();
-    // writeSingleEl(InputOut, NumArgs);
-    // for (auto &Arg : Args) {
-    //   writeSingleEl(InputOut, Arg.Content);
-    //   writeSingleEl(InputOut, Arg.ObjIdx);
-    // }
+    uint32_t NumArgs = Args.size();
+    writeSingleEl(InputOut, NumArgs);
+    for (auto &Arg : Args) {
+      writeSingleEl(InputOut, Arg.Content);
+      writeSingleEl(InputOut, Arg.ObjIdx);
+    }
 
-    // uint32_t NumGetObjects = GetObjects.size();
-    // writeSingleEl(InputOut, NumGetObjects);
-    // for (auto ObjIdx : GetObjects) {
-    //   writeSingleEl(InputOut, ObjIdx);
-    // }
+    uint32_t NumGetObjects = GetObjects.size();
+    writeSingleEl(InputOut, NumGetObjects);
+    for (auto ObjIdx : GetObjects) {
+      writeSingleEl(InputOut, ObjIdx);
+    }
   }
 };
 
