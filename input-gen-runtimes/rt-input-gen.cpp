@@ -38,14 +38,14 @@ struct ObjectTy {
   ~ObjectTy() {
     free(Output);
     free(Input);
-    free(Initialized);
+    free(Used);
   }
 
   uintptr_t getSize() const { return AllocationSize; }
   void *begin() { return Input; }
   void *end() { return advance(Input, AllocationSize); }
   bool isUsed(void *Ptr, uint32_t Size) {
-    return isInitialized(diff(Ptr, Input), Size);
+    return isUsed(diff(Ptr, Input), Size);
   }
 
   void *getBasePtr() { return reinterpret_cast<void *>(MaxObjectSize / 2); }
@@ -61,9 +61,7 @@ struct ObjectTy {
     intptr_t Offset = reinterpret_cast<intptr_t>(Ptr) -
                       reinterpret_cast<intptr_t>(getBasePtr());
     ensureAllocation(Offset, Size);
-    T *OutputLoc =
-        reinterpret_cast<T *>(advance(Output, AllocationOffset + Offset));
-    *OutputLoc = Val;
+    markUsed(Offset, Size);
   }
 
   const size_t Idx;
@@ -74,7 +72,7 @@ private:
   void *Output = nullptr;
   void *Input = nullptr;
   // TODO make this a bit-vector
-  uint8_t *Initialized = nullptr;
+  uint8_t *Used = nullptr;
 
   /// Returns true if it was already allocated
   bool ensureAllocation(intptr_t Offset, uint32_t Size) {
@@ -84,12 +82,17 @@ private:
     return false;
   }
 
-  bool isInitialized(intptr_t Offset, uint32_t Size) {
+  bool isUsed(intptr_t Offset, uint32_t Size) {
     assert(isAllocated(Offset, Size));
     for (unsigned It = 0; It < Size; It++)
-      if (!Initialized[Offset - AllocationOffset])
+      if (!Used[Offset - AllocationOffset])
         return false;
     return true;
+  }
+
+  void markUsed(intptr_t Offset, uint32_t Size) {
+    for (unsigned It = 0; It < Size; It++)
+      Used[Offset - AllocationOffset] = 1;
   }
 
   bool isAllocated(intptr_t Offset, uint32_t Size) {
@@ -108,13 +111,14 @@ private:
     uint8_t Bytes[sizeof(Val)];
     memcpy(Bytes, &Val, sizeof(Val));
     for (unsigned It = 0; It < sizeof(Val); It++) {
-      if (!isInitialized(Offset + It, 1)) {
+      if (!isUsed(Offset + It, 1)) {
         uint8_t *OutputLoc = reinterpret_cast<uint8_t *>(
             advance(Output, -AllocationOffset + Offset + It));
         uint8_t *InputLoc = reinterpret_cast<uint8_t *>(
             advance(Input, -AllocationOffset + Offset + It));
         *OutputLoc = Bytes[It];
         *InputLoc = Bytes[It];
+        markUsed(Offset + It, 1);
       }
     }
   }
@@ -169,7 +173,7 @@ private:
 
     extendMemory(Input, NewAllocationSize, NewAllocationOffset);
     extendMemory(Output, NewAllocationSize, NewAllocationOffset);
-    extendMemory(Initialized, NewAllocationSize, NewAllocationOffset);
+    extendMemory(Used, NewAllocationSize, NewAllocationOffset);
 
     AllocationSize = NewAllocationSize;
     AllocationOffset = NewAllocationOffset;
@@ -209,6 +213,9 @@ struct InputGenRTTy {
     if (this->FuncIdent != "") {
       this->FuncIdent += ".";
     }
+    // NULL object. This guarantees all the remaining objs will have the top
+    // bits > 0.
+    getNewObj(0, true);
   }
   ~InputGenRTTy() { report(); }
 
@@ -243,7 +250,8 @@ struct InputGenRTTy {
   ObjectTy *globalPtrToObj(void *GlobalPtr) {
     size_t Idx =
         (reinterpret_cast<intptr_t>(GlobalPtr) & ObjIdxMask) / MaxObjectSize;
-    assert(Idx >= 0 && Idx < Objects.size());
+    // Idx > 0 because Idx = 0 is the NULL pointer (object).
+    assert(Idx > 0 && Idx < Objects.size());
     return Objects[Idx].get();
   }
 
@@ -392,7 +400,7 @@ struct InputGenRTTy {
     writeSingleEl(InputOut, NumGlobals);
 
     for (uint32_t I = 0; I < NumGlobals; ++I) {
-      writeSingleEl(InputOut, Globals[I]->Idx);
+      writeSingleEl(InputOut, (uint32_t)Globals[I]);
     }
 
     // std::map<void *, std::pair<uintptr_t, uint32_t>> ValMap;
@@ -467,7 +475,7 @@ template <typename T> T ObjectTy::read(void *Ptr, uint32_t Size) {
 
   T *OutputLoc =
       reinterpret_cast<T *>(advance(Output, -AllocationOffset + Offset));
-  if (WasAllocated && isInitialized(Offset, Size))
+  if (WasAllocated && isUsed(Offset, Size))
     return *OutputLoc;
 
   T Val = getInputGenRT().getNewValue<T>();
