@@ -8,6 +8,7 @@
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/IRReader/IRReader.h"
+#include "llvm/Passes/OptimizationLevel.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Error.h"
@@ -60,6 +61,10 @@ static cl::opt<bool> ClVerify("verify", cl::cat(InputGenCategory));
 static cl::opt<bool> ClDebug("g", cl::cat(InputGenCategory));
 
 static cl::opt<std::string> ClFunction("function", cl::cat(InputGenCategory));
+
+static cl::opt<bool>
+    ClOptimizeBeforeInstrumenting("optimize-before-instrumenting",
+                                  cl::cat(InputGenCategory));
 
 constexpr char ToolName[] = "input-gen";
 
@@ -123,7 +128,7 @@ class InputGenOrchestration {
 public:
   Module &M;
   std::string Clang;
-  InputGenOrchestration(Module &M) : M(M){};
+  InputGenOrchestration(Module &M) : M(M) {};
   void init(int Argc, char **Argv) {
     if (ClCompileInputGenExecutables) {
       if (ClGenRuntime.empty() || ClRunRuntime.empty())
@@ -217,6 +222,12 @@ public:
     PB.registerFunctionAnalyses(FAM);
     PB.registerLoopAnalyses(LAM);
     PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
+
+    if (ClOptimizeBeforeInstrumenting) {
+      ModulePassManager MPM =
+          PB.buildPerModuleDefaultPipeline(OptimizationLevel::O1);
+      MPM.run(*InstrM, MAM);
+    }
 
     ModuleInputGenInstrumenter MIGI(*InstrM, MAM, Mode);
     bool Success = MIGI.instrumentModule(*InstrM);
