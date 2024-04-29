@@ -94,13 +94,10 @@ struct ObjectTy {
 
     if constexpr (std::is_pointer<T>::value)
       PtrMap[Ptr] = Idx;
-    // TODO int128 fp80 etc dont fit in int64
-    ValMap[Ptr] = {(uintptr_t)Val, Idx};
   }
 
   const size_t Idx;
   std::map<void *, int32_t> PtrMap;
-  std::map<void *, std::pair<uintptr_t, uint32_t>> ValMap;
 
 private:
   intptr_t AllocationSize = 0;
