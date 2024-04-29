@@ -22,17 +22,28 @@ static int VERBOSE = 0;
 // Must be a power of 2
 static constexpr intptr_t MaxObjectSize = 1ULL << 32;
 static constexpr intptr_t MinObjAllocation = 1024;
-static constexpr intptr_t ObjAlignment = 256;
+static constexpr intptr_t ObjAlignment = 16;
 
 static constexpr intptr_t PtrInObjMask = MaxObjectSize - 1;
 static constexpr intptr_t ObjIdxMask = ~(PtrInObjMask);
 
+template <typename T> static T alignStart(T Ptr) {
+  intptr_t IPtr = reinterpret_cast<intptr_t>(Ptr);
+  return reinterpret_cast<T>(IPtr / ObjAlignment * ObjAlignment);
+}
+
+template <typename T> static T alignEnd(T Ptr) {
+  intptr_t IPtr = reinterpret_cast<intptr_t>(Ptr);
+  return reinterpret_cast<intptr_t>((((IPtr - 1) / ObjAlignment) + 1) *
+                                    ObjAlignment);
+}
+
 static void *advance(void *Ptr, uint64_t Bytes) {
-  return reinterpret_cast<char *>(Ptr) + Bytes;
+  return reinterpret_cast<uint8_t *>(Ptr) + Bytes;
 }
 
 static intptr_t diff(void *LHS, void *RHS) {
-  return reinterpret_cast<char *>(LHS) - reinterpret_cast<char *>(RHS);
+  return reinterpret_cast<uint8_t *>(LHS) - reinterpret_cast<uint8_t *>(RHS);
 }
 
 struct ObjectTy {
@@ -43,12 +54,28 @@ struct ObjectTy {
     free(Used);
   }
 
+  struct AlignedMemoryChunk {
+    void *Ptr;
+    intptr_t Size;
+    intptr_t Offset;
+  };
+
+  AlignedMemoryChunk getAlignedInputMemory() {
+    void *Start = Input;
+    while (!anyUsed(Start, ObjAlignment)) {
+      Start = advance(Start, ObjAlignment);
+    }
+    void *End = advance(Input, AllocationSize - ObjAlignment);
+    while (!anyUsed(End, ObjAlignment)) {
+      End = advance(End, -ObjAlignment);
+    }
+    End = advance(End, ObjAlignment);
+    return {Start, diff(End, Start), diff(Start, getBasePtr())};
+  }
+
   uintptr_t getSize() const { return AllocationSize; }
   void *begin() { return Input; }
   void *end() { return advance(Input, AllocationSize); }
-  bool isUsed(void *Ptr, uint32_t Size) {
-    return isUsed(diff(Ptr, Input), Size);
-  }
 
   void *getBasePtr() { return reinterpret_cast<void *>(MaxObjectSize / 2); }
   void *getRealPtr(void *Ptr) {
@@ -91,7 +118,23 @@ private:
     return false;
   }
 
-  bool isUsed(intptr_t Offset, uint32_t Size) {
+  bool anyUsed(void *Ptr, uint32_t Size) {
+    return anyUsed(diff(Ptr, Input), Size);
+  }
+
+  bool anyUsed(intptr_t Offset, uint32_t Size) {
+    assert(isAllocated(Offset, Size));
+    for (unsigned It = 0; It < Size; It++)
+      if (Used[Offset - AllocationOffset])
+        return true;
+    return false;
+  }
+
+  bool allUsed(void *Ptr, uint32_t Size) {
+    return allUsed(diff(Ptr, Input), Size);
+  }
+
+  bool allUsed(intptr_t Offset, uint32_t Size) {
     assert(isAllocated(Offset, Size));
     for (unsigned It = 0; It < Size; It++)
       if (!Used[Offset - AllocationOffset])
@@ -120,7 +163,7 @@ private:
     uint8_t Bytes[sizeof(Val)];
     memcpy(Bytes, &Val, sizeof(Val));
     for (unsigned It = 0; It < sizeof(Val); It++) {
-      if (!isUsed(Offset + It, 1)) {
+      if (!allUsed(Offset + It, 1)) {
         uint8_t *OutputLoc = reinterpret_cast<uint8_t *>(
             advance(Output, -AllocationOffset + Offset + It));
         uint8_t *InputLoc = reinterpret_cast<uint8_t *>(
@@ -159,15 +202,12 @@ private:
     if (AccessStartOffset < AllocatedMemoryStartOffset) {
       // Extend the allocation in the negative direction
       NewAllocatedMemoryStartOffset =
-          std::min(2 * AccessStartOffset, -MinObjAllocation);
-      intptr_t AlignmentOffset = NewAllocatedMemoryStartOffset % ObjAlignment;
-      if (AlignmentOffset)
-        NewAllocatedMemoryStartOffset += AlignmentOffset;
+          alignStart(std::min(2 * AccessStartOffset, -MinObjAllocation));
     }
     if (AccessEndOffset >= AllocatedMemoryEndOffset) {
       // Extend the allocation in the positive direction
       NewAllocatedMemoryEndOffset =
-          std::max(2 * AccessEndOffset, MinObjAllocation);
+          alignEnd(std::max(2 * AccessEndOffset, MinObjAllocation));
     }
 
     intptr_t NewAllocationOffset = NewAllocatedMemoryStartOffset;
@@ -235,7 +275,6 @@ struct InputGenRTTy {
   std::filesystem::path ExecPath;
   std::mt19937 Gen, GenStub;
   std::uniform_int_distribution<> Rand;
-  std::vector<char> Conds;
 
   int rand(bool Stub) { return Stub ? Rand(GenStub) : Rand(Gen); }
 
@@ -367,36 +406,17 @@ struct InputGenRTTy {
     uint32_t NumObjects = Objects.size();
     writeSingleEl(InputOut, NumObjects);
 
-    std::map<void *, ObjectTy *> TrimmedObjs;
     std::map<uint64_t, void *> Remap;
     for (auto &It : Objects) {
-      auto *ObjLIt = It->begin();
-      auto *ObjRIt = It->end();
+      auto MemoryChunk = It->getAlignedInputMemory();
       if (VERBOSE)
-        printf("%p : %p :: %lu\n", ObjLIt, ObjRIt, It->getSize());
-      while (ObjRIt != ObjLIt) {
-        if (It->isUsed(ObjLIt, 1))
-          break;
-        ObjLIt = advance(ObjLIt, 1);
-      }
-      if (VERBOSE)
-        printf("%p : %p\n", ObjLIt, ObjRIt);
-      while (ObjRIt != ObjLIt) {
-        if (It->isUsed(advance(ObjRIt, -1), 1))
-          break;
-        ObjRIt = advance(ObjRIt, -1);
-      }
-      uint64_t Size =
-          reinterpret_cast<char *>(ObjRIt) - reinterpret_cast<char *>(ObjLIt);
-      if (VERBOSE)
-        printf("Size %lu\n", Size);
-
-      writeSingleEl(InputOut, It->Idx);
-      writeSingleEl(InputOut, TotalSize);
-
-      TotalSize += Size;
-      if (ObjLIt != ObjRIt)
-        TrimmedObjs[ObjLIt] = It.get();
+        printf("Obj %zu aligned memory chunk at %p, size %lu\n", It->Idx,
+               MemoryChunk.Ptr, MemoryChunk.Size);
+      writeSingleEl(InputOut, MemoryChunk.Size);
+      writeSingleEl(InputOut, MemoryChunk.Offset);
+      InputOut.write(reinterpret_cast<char *>(MemoryChunk.Ptr),
+                     MemoryChunk.Size);
+      TotalSize += MemoryChunk.Size;
     }
 
     if (VERBOSE)
@@ -485,7 +505,7 @@ template <typename T> T ObjectTy::read(void *Ptr, uint32_t Size) {
 
   T *OutputLoc =
       reinterpret_cast<T *>(advance(Output, -AllocationOffset + Offset));
-  if (WasAllocated && isUsed(Offset, Size))
+  if (WasAllocated && allUsed(Offset, Size))
     return *OutputLoc;
 
   T Val = getInputGenRT().getNewValue<T>();
