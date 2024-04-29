@@ -21,6 +21,8 @@ static int VERBOSE = 0;
 
 // Must be a power of 2
 static constexpr intptr_t MaxObjectSize = 1ULL << 32;
+static constexpr intptr_t MinObjAllocation = 1024;
+static constexpr intptr_t ObjAlignment = 256;
 
 static constexpr intptr_t PtrInObjMask = MaxObjectSize - 1;
 static constexpr intptr_t ObjIdxMask = ~(PtrInObjMask);
@@ -62,9 +64,16 @@ struct ObjectTy {
                       reinterpret_cast<intptr_t>(getBasePtr());
     ensureAllocation(Offset, Size);
     markUsed(Offset, Size);
+
+    if constexpr (std::is_pointer<T>::value)
+      PtrMap[Ptr] = Idx;
+    // TODO int128 fp80 etc dont fit in int64
+    ValMap[Ptr] = {(uintptr_t)Val, Idx};
   }
 
   const size_t Idx;
+  std::map<void *, int32_t> PtrMap;
+  std::map<void *, std::pair<uintptr_t, uint32_t>> ValMap;
 
 private:
   intptr_t AllocationSize = 0;
@@ -136,8 +145,6 @@ private:
   /// Reallocates the data so as to make the memory at `Offset` with length
   /// `Size` available
   void reallocateData(intptr_t Offset, uint32_t Size) {
-    static constexpr intptr_t MinimumAllocation = 1024;
-
     assert(!isAllocated(Offset, Size));
 
     intptr_t AllocatedMemoryStartOffset = AllocationOffset;
@@ -152,12 +159,15 @@ private:
     if (AccessStartOffset < AllocatedMemoryStartOffset) {
       // Extend the allocation in the negative direction
       NewAllocatedMemoryStartOffset =
-          std::min(2 * AccessStartOffset, -MinimumAllocation);
+          std::min(2 * AccessStartOffset, -MinObjAllocation);
+      intptr_t AlignmentOffset = NewAllocatedMemoryStartOffset % ObjAlignment;
+      if (AlignmentOffset)
+        NewAllocatedMemoryStartOffset += AlignmentOffset;
     }
     if (AccessEndOffset >= AllocatedMemoryEndOffset) {
       // Extend the allocation in the positive direction
       NewAllocatedMemoryEndOffset =
-          std::max(2 * AccessEndOffset, MinimumAllocation);
+          std::max(2 * AccessEndOffset, MinObjAllocation);
     }
 
     intptr_t NewAllocationOffset = NewAllocatedMemoryStartOffset;
@@ -344,8 +354,8 @@ struct InputGenRTTy {
     for (size_t I = 0; I < Args.size(); ++I)
       fprintf(ReportOut, "Arg %zu: %p\n", I, (void *)Args[I].Content);
     fprintf(ReportOut, "Num new values: %lu\n", NumNewValues);
-    fprintf(ReportOut, "Heap PtrMap: %lu\n", Heap->PtrMap.size());
-    fprintf(ReportOut, "Heap ValMap: %lu\n", Heap->ValMap.size());
+    // fprintf(ReportOut, "Heap PtrMap: %lu\n", Heap->PtrMap.size());
+    // fprintf(ReportOut, "Heap ValMap: %lu\n", Heap->ValMap.size());
     fprintf(ReportOut, "Objects (%zu total)\n", Objects.size());
 
     writeSingleEl(InputOut, SeedStub);
@@ -354,7 +364,7 @@ struct InputGenRTTy {
     uint64_t TotalSize = 0;
     writeSingleEl(InputOut, TotalSize);
 
-    uint32_t NumObjects = ObjectsBak.size();
+    uint32_t NumObjects = Objects.size();
     writeSingleEl(InputOut, NumObjects);
 
     std::map<void *, ObjectTy *> TrimmedObjs;
