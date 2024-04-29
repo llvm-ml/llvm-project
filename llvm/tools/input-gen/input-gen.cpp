@@ -66,6 +66,12 @@ static cl::opt<bool>
     ClOptimizeBeforeInstrumenting("optimize-before-instrumenting",
                                   cl::cat(InputGenCategory));
 
+static cl::opt<bool> ClInstrumentedPGOGenerate("pgo-instr-generate",
+                                               cl::cat(InputGenCategory));
+
+static cl::opt<std::string> ClInstrumentedPGOUse("pgo-instr-use",
+                                                 cl::cat(InputGenCategory));
+
 constexpr char ToolName[] = "input-gen";
 
 [[noreturn]] static void fatalError(const Twine &Message) {
@@ -269,8 +275,16 @@ public:
       llvm::outs() << "Writing instrumented module to file failed\n";
       exit(1);
     }
+
+    bool InstrumentBinaryPGO = false;
+    std::string PGOProfilePath = "";
+    if (Mode == llvm::IG_Run) {
+      InstrumentBinaryPGO = ClInstrumentedPGOGenerate;
+      PGOProfilePath = ClInstrumentedPGOUse;
+    }
     if (ClCompileInputGenExecutables) {
-      if (!compileExecutable(BcFileName, ExecutableFileName, RuntimeName)) {
+      if (!compileExecutable(BcFileName, ExecutableFileName, RuntimeName,
+                             InstrumentBinaryPGO, PGOProfilePath)) {
         llvm::outs() << "Compiling instrumented module failed\n";
         exit(1);
       }
@@ -333,12 +347,22 @@ public:
   }
 
   bool compileExecutable(std::string ModuleName, std::string ExecutableName,
-                         std::string RuntimeName) {
+                         std::string RuntimeName,
+                         bool GenInstrumentationPGO = false,
+                         std::string PGOProfilePath = "") {
     if (ClCompileInputGenExecutables) {
       outs() << "Compiling " << ExecutableName << "\n";
-      SmallVector<StringRef, 10> Args = {
+      SmallVector<StringRef, 11> Args = {
           Clang,       "-fopenmp", "-O2", "-ldl",        "-rdynamic",
           RuntimeName, ModuleName, "-o",  ExecutableName};
+      assert(!(GenInstrumentationPGO && !PGOProfilePath.empty()) &&
+             "Cannot instrument and use profile at the same time.");
+      std::string ProfileInstrUseArg = "-fprofile-instr-use=" + PGOProfilePath;
+      if (GenInstrumentationPGO)
+        Args.push_back("-fprofile-instr-generate");
+      else if (!PGOProfilePath.empty()) {
+        Args.push_back(ProfileInstrUseArg);
+      }
       if (ClDebug)
         Args.push_back("-g");
       std::string ErrMsg;
@@ -374,6 +398,12 @@ int main(int argc, char **argv) {
   if (!M) {
     Diag.print("input-gen", errs());
     return 1;
+  }
+
+  if (ClInstrumentedPGOGenerate && !ClInstrumentedPGOUse.empty()) {
+    ExitOnErr(make_error<StringError>(
+        "Cannot use a PGO profile while instrumenting the program.",
+        errc::invalid_argument));
   }
 
   InputGenOrchestration IGO(*M);
