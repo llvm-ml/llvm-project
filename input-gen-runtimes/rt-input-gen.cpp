@@ -93,11 +93,11 @@ struct ObjectTy {
     markUsed(Offset, Size);
 
     if constexpr (std::is_pointer<T>::value)
-      PtrMap[Ptr] = Idx;
+      Ptrs.push_back(Offset);
   }
 
   const size_t Idx;
-  std::map<void *, int32_t> PtrMap;
+  std::vector<intptr_t> Ptrs;
 
 private:
   intptr_t AllocationSize = 0;
