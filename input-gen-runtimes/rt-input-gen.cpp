@@ -604,7 +604,10 @@ ARG(long double, x86_fp80)
 #undef ARG
 
 VoidPtrTy __inputgen_translate_ptr(VoidPtrTy Ptr) {
-  return getInputGenRT().translatePtr(Ptr);
+  VoidPtrTy T = getInputGenRT().translatePtr(Ptr);
+  if (VERBOSE)
+    printf("Translate %p -> %p\n", (void *)Ptr, (void *)T);
+  return T;
 }
 
 // TODO Need to rename this when instrumenting
