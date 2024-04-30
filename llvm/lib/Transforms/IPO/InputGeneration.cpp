@@ -14,6 +14,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Transforms/IPO/InputGeneration.h"
+#include "llvm/IR/Attributes.h"
 #include "llvm/Transforms/IPO/InputGenerationImpl.h"
 
 #include "llvm/ADT/EnumeratedArray.h"
@@ -791,6 +792,9 @@ void InputGenInstrumenter::createGenerationEntryPoint(Function &F,
   Function *InitF = M.getFunction("__input_gen_init");
   IRB.CreateCall(FunctionCallee(InitF->getFunctionType(), InitF), {});
 
+  if (F.getFnAttribute("min-legal-vector-width").isValid())
+    EntryPoint->addFnAttr(F.getFnAttribute("min-legal-vector-width"));
+
   SmallVector<Value *> Args;
   for (auto &Arg : F.args()) {
     if (auto *ST = dyn_cast<StructType>(Arg.getType())) {
@@ -851,13 +855,43 @@ void InputGenInstrumenter::createRunEntryPoint(Function &F, bool UniqName) {
   Function *InitF = M.getFunction("__input_gen_init");
   IRB.CreateCall(FunctionCallee(InitF->getFunctionType(), InitF), {});
 
+  if (F.getFnAttribute("min-legal-vector-width").isValid())
+    EntryPoint->addFnAttr(F.getFnAttribute("min-legal-vector-width"));
+
   Argument *ArgsPtr = EntryPoint->getArg(0);
   unsigned Idx = 0;
+  auto GetNext = [&]() {
+    return IRB.CreateGEP(PtrTy, ArgsPtr, {IRB.getInt64(Idx++)});
+  };
   SmallVector<Value *> Args;
   for (auto &Arg : F.args()) {
-    Value *ArgPtr = IRB.CreateGEP(PtrTy, ArgsPtr, {IRB.getInt64(Idx++)});
-    Value *Load = IRB.CreateLoad(Arg.getType(), ArgPtr);
-    Args.push_back(Load);
+    if (auto *ST = dyn_cast<StructType>(Arg.getType())) {
+      Value *V = UndefValue::get(ST);
+      for (unsigned It = 0; It < ST->getNumElements(); It++) {
+        Value *ElPtr = GetNext();
+        Type *ElTy = ST->getElementType(It);
+        V = IRB.CreateInsertValue(V, IRB.CreateLoad(ElTy, ElPtr), {It});
+      }
+      Args.push_back(V);
+    } else if (auto *VT = dyn_cast<VectorType>(Arg.getType())) {
+      Type *ElTy = VT->getElementType();
+      if (!VT->getElementCount().isScalable()) {
+        auto Count = VT->getElementCount().getFixedValue();
+        Value *V = UndefValue::get(VT);
+        for (unsigned It = 0; It < Count; It++) {
+          Value *ElPtr = GetNext();
+          V = IRB.CreateInsertElement(V, IRB.CreateLoad(ElTy, ElPtr),
+                                      IRB.getInt64(It));
+        }
+        Args.push_back(V);
+      } else {
+        llvm_unreachable("Scalable vectors unsupported.");
+      }
+    } else {
+      Value *ArgPtr = GetNext();
+      Type *ElTy = Arg.getType();
+      Args.push_back(IRB.CreateLoad(ElTy, ArgPtr));
+    }
   }
   IRB.CreateCall(FunctionCallee(F.getFunctionType(), &F), Args, "");
 }
