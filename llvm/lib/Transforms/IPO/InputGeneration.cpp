@@ -279,56 +279,57 @@ void InputGenInstrumenter::instrumentAddress(
   if (isa<GlobalVariable>(Object))
     return;
 
-  if (auto *ST = dyn_cast<StructType>(Access.AccessTy)) {
-    for (unsigned It = 0; It < ST->getNumElements(); It++) {
-      Type *ElTy = ST->getElementType(It);
-      int32_t ElAllocSize = DL.getTypeAllocSize(ElTy);
-      auto *GEP = IRB.CreateConstGEP2_32(Access.AccessTy, Access.Addr, 0, It);
-      Value *V = nullptr;
-      switch (Access.Kind) {
-      case InterestingMemoryAccess::READ:
-        assert(Access.V == nullptr);
-        break;
-      case InterestingMemoryAccess::WRITE:
-        assert(Access.V != nullptr);
-        V = IRB.CreateExtractValue(Access.V, {It});
-        break;
-      case InterestingMemoryAccess::READ_THEN_WRITE:
-        break;
-      }
-      emitMemoryAccessCallback(IRB, GEP, V, ElTy, ElAllocSize, Access.Kind,
-                               Object);
-    }
-  } else if (auto *VT = dyn_cast<VectorType>(Access.AccessTy)) {
-    Type *ElTy = VT->getElementType();
-    int32_t ElAllocSize = DL.getTypeAllocSize(ElTy);
-    if (!VT->getElementCount().isScalable()) {
-      auto Count = VT->getElementCount().getFixedValue();
-      for (unsigned It = 0; It < Count; It++) {
-        auto *GEP = IRB.CreateConstGEP2_64(Access.AccessTy, Access.Addr, 0, It);
+  std::function<void(Type * TheType, Value * TheAddr, Value * TheValue)>
+      HandleType;
+  HandleType = [&](Type *TheType, Value *TheAddr, Value *TheValue) {
+    if (auto *ST = dyn_cast<StructType>(TheType)) {
+      for (unsigned It = 0; It < ST->getNumElements(); It++) {
+        Type *ElTy = ST->getElementType(It);
+        auto *GEP = IRB.CreateConstGEP2_32(TheType, TheAddr, 0, It);
         Value *V = nullptr;
         switch (Access.Kind) {
         case InterestingMemoryAccess::READ:
-          assert(Access.V == nullptr);
+          assert(TheValue == nullptr);
           break;
         case InterestingMemoryAccess::WRITE:
-          assert(Access.V != nullptr);
-          V = IRB.CreateExtractElement(Access.V, IRB.getInt64(It));
+          assert(TheValue != nullptr);
+          V = IRB.CreateExtractValue(TheValue, {It});
           break;
         case InterestingMemoryAccess::READ_THEN_WRITE:
           break;
         }
-        emitMemoryAccessCallback(IRB, GEP, V, ElTy, ElAllocSize, Access.Kind,
-                                 Object);
+        HandleType(ElTy, GEP, V);
+      }
+    } else if (auto *VT = dyn_cast<VectorType>(TheType)) {
+      Type *ElTy = VT->getElementType();
+      if (!VT->getElementCount().isScalable()) {
+        auto Count = VT->getElementCount().getFixedValue();
+        for (unsigned It = 0; It < Count; It++) {
+          auto *GEP = IRB.CreateConstGEP2_64(TheType, TheAddr, 0, It);
+          Value *V = nullptr;
+          switch (Access.Kind) {
+          case InterestingMemoryAccess::READ:
+            assert(TheValue == nullptr);
+            break;
+          case InterestingMemoryAccess::WRITE:
+            assert(TheValue != nullptr);
+            V = IRB.CreateExtractElement(TheValue, IRB.getInt64(It));
+            break;
+          case InterestingMemoryAccess::READ_THEN_WRITE:
+            break;
+          }
+          HandleType(ElTy, GEP, V);
+        }
+      } else {
+        llvm_unreachable("Scalable vectors unsupported.");
       }
     } else {
-      llvm_unreachable("Scalable vectors unsupported.");
+      int32_t AllocSize = DL.getTypeAllocSize(TheType);
+      emitMemoryAccessCallback(IRB, TheAddr, TheValue, TheType, AllocSize,
+                               Access.Kind, Object);
     }
-  } else {
-    int32_t AllocSize = DL.getTypeAllocSize(Access.AccessTy);
-    emitMemoryAccessCallback(IRB, Access.Addr, Access.V, Access.AccessTy,
-                             AllocSize, Access.Kind, Object);
-  }
+  };
+  HandleType(Access.AccessTy, Access.Addr, Access.V);
   Access.I->setOperand(Access.AddrOperandNo,
                        emitTranslatePtrCall(IRB, Access.Addr));
 }
@@ -796,40 +797,36 @@ void InputGenInstrumenter::createGenerationEntryPoint(Function &F,
     EntryPoint->addFnAttr(F.getFnAttribute("min-legal-vector-width"));
 
   SmallVector<Value *> Args;
-  for (auto &Arg : F.args()) {
-    if (auto *ST = dyn_cast<StructType>(Arg.getType())) {
+  std::function<Value *(Type * T)> HandleType;
+  HandleType = [&](Type *T) -> Value * {
+    if (auto *ST = dyn_cast<StructType>(T)) {
       Value *V = UndefValue::get(ST);
       for (unsigned It = 0; It < ST->getNumElements(); It++) {
         Type *ElTy = ST->getElementType(It);
-        FunctionCallee ArgFn = M.getOrInsertFunction(
-            InputGenCallbackPrefix + "arg_" + ::getTypeName(ElTy),
-            FunctionType::get(ElTy, false));
-        V = IRB.CreateInsertValue(V, IRB.CreateCall(ArgFn, {}), {It});
+        V = IRB.CreateInsertValue(V, HandleType(ElTy), {It});
       }
-      Args.push_back(V);
-    } else if (auto *VT = dyn_cast<VectorType>(Arg.getType())) {
+      return V;
+    } else if (auto *VT = dyn_cast<VectorType>(T)) {
       Type *ElTy = VT->getElementType();
       if (!VT->getElementCount().isScalable()) {
         auto Count = VT->getElementCount().getFixedValue();
         Value *V = UndefValue::get(VT);
-        FunctionCallee ArgFn = M.getOrInsertFunction(
-            InputGenCallbackPrefix + "arg_" + ::getTypeName(ElTy),
-            FunctionType::get(ElTy, false));
         for (unsigned It = 0; It < Count; It++) {
-          V = IRB.CreateInsertElement(V, IRB.CreateCall(ArgFn, {}),
-                                      IRB.getInt64(It));
+          V = IRB.CreateInsertElement(V, HandleType(ElTy), IRB.getInt64(It));
         }
-        Args.push_back(V);
+        return V;
       } else {
         llvm_unreachable("Scalable vectors unsupported.");
       }
     } else {
       FunctionCallee ArgFn = M.getOrInsertFunction(
-          InputGenCallbackPrefix + "arg_" + ::getTypeName(Arg.getType()),
-          FunctionType::get(Arg.getType(), false));
-      Args.push_back(IRB.CreateCall(ArgFn, {}));
+          InputGenCallbackPrefix + "arg_" + ::getTypeName(T),
+          FunctionType::get(T, false));
+      return IRB.CreateCall(ArgFn, {});
     }
-  }
+  };
+  for (auto &Arg : F.args())
+    Args.push_back(HandleType(Arg.getType()));
   IRB.CreateCall(FunctionCallee(F.getFunctionType(), &F), Args, "");
 }
 
@@ -892,9 +889,8 @@ void InputGenInstrumenter::createRunEntryPoint(Function &F, bool UniqName) {
       return IRB.CreateLoad(ElTy, ArgPtr);
     }
   };
-  for (auto &Arg : F.args()) {
+  for (auto &Arg : F.args())
     Args.push_back(HandleType(Arg.getType()));
-  }
   IRB.CreateCall(FunctionCallee(F.getFunctionType(), &F), Args, "");
 }
 
