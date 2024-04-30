@@ -17,17 +17,9 @@
 #include <type_traits>
 #include <vector>
 
+#include "rt.hpp"
+
 static int VERBOSE = 0;
-
-// Must be a power of 2
-static constexpr intptr_t MaxObjectSize = 1ULL << 32;
-static constexpr intptr_t MinObjAllocation = 1024;
-static constexpr intptr_t ObjAlignment = 16;
-
-static constexpr intptr_t PtrInObjMask = MaxObjectSize - 1;
-static constexpr intptr_t ObjIdxMask = ~(PtrInObjMask);
-
-typedef uint8_t *VoidPtrTy;
 
 template <typename T> static T alignStart(T Ptr) {
   intptr_t IPtr = reinterpret_cast<intptr_t>(Ptr);
@@ -64,35 +56,28 @@ struct ObjectTy {
 
   AlignedMemoryChunk getAlignedInputMemory() {
     VoidPtrTy Start = Input;
-    while (!anyUsed(Start, ObjAlignment)) {
-      Start = advance(Start, ObjAlignment);
-    }
-    VoidPtrTy End = advance(Input, AllocationSize - ObjAlignment);
-    while (!anyUsed(End, ObjAlignment)) {
-      End = advance(End, -ObjAlignment);
-    }
-    End = advance(End, ObjAlignment);
-    return {Start, diff(End, Start), diff(Start, getBasePtr())};
+    VoidPtrTy End = Input + AllocationSize;
+    assert(reinterpret_cast<intptr_t>(Start) % ObjAlignment == 0 &&
+           reinterpret_cast<intptr_t>(End) % ObjAlignment == 0);
+    while (Start != End && !anyUsed(Start, ObjAlignment))
+      Start = Start + ObjAlignment;
+    while (Start != End && !anyUsed(End - ObjAlignment, ObjAlignment))
+      End = End - ObjAlignment;
+    return {Start, diff(End, Start), diff(Start, getObjBasePtr())};
   }
 
   uintptr_t getSize() const { return AllocationSize; }
   VoidPtrTy begin() { return Input; }
   VoidPtrTy end() { return advance(Input, AllocationSize); }
 
-  VoidPtrTy getBasePtr() {
-    return reinterpret_cast<VoidPtrTy>(MaxObjectSize / 2);
-  }
-
   VoidPtrTy getRealPtr(VoidPtrTy Ptr) {
-    return advance(Output, getOffset(Ptr) - AllocationOffset);
+    return advance(Output, getOffsetFromObjBasePtr(Ptr) - AllocationOffset);
   }
-
-  intptr_t getOffset(VoidPtrTy Ptr) { return Ptr - getBasePtr(); }
 
   template <typename T> T read(VoidPtrTy Ptr, uint32_t Size);
 
   template <typename T> void write(T Val, VoidPtrTy Ptr, uint32_t Size) {
-    intptr_t Offset = getOffset(Ptr);
+    intptr_t Offset = getOffsetFromObjBasePtr(Ptr);
     ensureAllocation(Offset, Size);
     markUsed(Offset, Size);
 
@@ -124,9 +109,8 @@ private:
   }
 
   bool anyUsed(intptr_t Offset, uint32_t Size) {
-    assert(isAllocated(Offset, Size));
     for (unsigned It = 0; It < Size; It++)
-      if (Used[Offset - AllocationOffset])
+      if (isAllocated(Offset + It, 1) && Used[Offset - AllocationOffset])
         return true;
     return false;
   }
@@ -136,9 +120,8 @@ private:
   }
 
   bool allUsed(intptr_t Offset, uint32_t Size) {
-    assert(isAllocated(Offset, Size));
     for (unsigned It = 0; It < Size; It++)
-      if (!Used[Offset - AllocationOffset])
+      if (!isAllocated(Offset + It, 1) || !Used[Offset - AllocationOffset])
         return false;
     return true;
   }
@@ -232,6 +215,7 @@ private:
 struct ArgTy {
   uintptr_t Content;
   int32_t ObjIdx;
+  int32_t IsPtr;
 };
 
 template <typename T> static T fromArgTy(ArgTy U) {
@@ -241,11 +225,12 @@ template <typename T> static T fromArgTy(ArgTy U) {
   return A;
 }
 
-template <typename T> static ArgTy toArgTy(T A, int32_t ObjIdx) {
+template <typename T> static ArgTy toArgTy(T A, int32_t ObjIdx, int32_t IsPtr) {
   ArgTy U;
   static_assert(sizeof(T) <= sizeof(U));
   memcpy(&U.Content, &A, sizeof(A));
   U.ObjIdx = ObjIdx;
+  U.IsPtr = IsPtr;
   return U;
 }
 
@@ -285,6 +270,7 @@ struct InputGenRTTy {
 
   template <typename T>
   T getNewValue(int32_t *ObjIdx = nullptr, bool Stub = false, int Max = 10) {
+    static_assert(!std::is_pointer<T>::value);
     NumNewValues++;
     T V = rand(Stub) % Max;
     return V;
@@ -296,16 +282,10 @@ struct InputGenRTTy {
   }
 
   ObjectTy *globalPtrToObj(VoidPtrTy GlobalPtr) {
-    size_t Idx =
-        (reinterpret_cast<intptr_t>(GlobalPtr) & ObjIdxMask) / MaxObjectSize;
+    size_t Idx = globalPtrToObjIdx(GlobalPtr);
     // Idx > 0 because Idx = 0 is the NULL pointer (object).
     assert(Idx > 0 && Idx < Objects.size());
     return Objects[Idx].get();
-  }
-
-  VoidPtrTy globalPtrToLocalPtr(VoidPtrTy GlobalPtr) {
-    return reinterpret_cast<VoidPtrTy>(reinterpret_cast<intptr_t>(GlobalPtr) &
-                                       PtrInObjMask);
   }
 
   template <>
@@ -313,8 +293,7 @@ struct InputGenRTTy {
     NumNewValues++;
     if (rand(Stub) % 50) {
       size_t ObjIdx = getNewObj(1024 * 1024, true);
-      VoidPtrTy Ptr =
-          localPtrToGlobalPtr(ObjIdx, Objects[ObjIdx]->getBasePtr());
+      VoidPtrTy Ptr = localPtrToGlobalPtr(ObjIdx, getObjBasePtr());
       if (VERBOSE)
         printf("New Obj at ptr %p\n", (void *)Ptr);
       return Ptr;
@@ -341,7 +320,7 @@ struct InputGenRTTy {
     if (VERBOSE)
       printf("Global %p replaced with Obj %zu @ %p\n", (void *)Global, Idx,
              (void *)ReplGlobal);
-    *ReplGlobal = localPtrToGlobalPtr(Idx, Objects[Idx]->getBasePtr());
+    *ReplGlobal = localPtrToGlobalPtr(Idx, getObjBasePtr());
   }
 
   VoidPtrTy translatePtr(VoidPtrTy GlobalPtr) {
@@ -382,14 +361,6 @@ struct InputGenRTTy {
     }
   }
 
-  template <typename T> const char *ccast(T *Ptr) {
-    return reinterpret_cast<const char *>(Ptr);
-  }
-  template <typename T> T writeSingleEl(std::ofstream &Output, T El) {
-    Output.write(ccast(&El), sizeof(El));
-    return El;
-  }
-
   void report(FILE *ReportOut, std::ofstream &InputOut) {
     fprintf(ReportOut, "Args (%zu total)\n", Args.size());
     for (size_t I = 0; I < Args.size(); ++I)
@@ -399,14 +370,14 @@ struct InputGenRTTy {
     // fprintf(ReportOut, "Heap ValMap: %lu\n", Heap->ValMap.size());
     fprintf(ReportOut, "Objects (%zu total)\n", Objects.size());
 
-    writeSingleEl(InputOut, SeedStub);
+    writeV(InputOut, SeedStub);
 
     auto BeforeTotalSize = InputOut.tellp();
     uint64_t TotalSize = 0;
-    writeSingleEl(InputOut, TotalSize);
+    writeV(InputOut, TotalSize);
 
     uint32_t NumObjects = Objects.size();
-    writeSingleEl(InputOut, NumObjects);
+    writeV(InputOut, NumObjects);
 
     std::map<uint64_t, VoidPtrTy> Remap;
     for (auto &It : Objects) {
@@ -414,8 +385,8 @@ struct InputGenRTTy {
       if (VERBOSE)
         printf("Obj %zu aligned memory chunk at %p, size %lu\n", It->Idx,
                (void *)MemoryChunk.Ptr, MemoryChunk.Size);
-      writeSingleEl(InputOut, MemoryChunk.Size);
-      writeSingleEl(InputOut, MemoryChunk.Offset);
+      writeV<intptr_t>(InputOut, MemoryChunk.Size);
+      writeV<intptr_t>(InputOut, MemoryChunk.Offset);
       InputOut.write(reinterpret_cast<char *>(MemoryChunk.Ptr),
                      MemoryChunk.Size);
       TotalSize += MemoryChunk.Size;
@@ -425,72 +396,34 @@ struct InputGenRTTy {
       printf("TotalSize %lu\n", TotalSize);
     auto BeforeNumGlobals = InputOut.tellp();
     InputOut.seekp(BeforeTotalSize);
-    writeSingleEl(InputOut, TotalSize);
+    writeV(InputOut, TotalSize);
     InputOut.seekp(BeforeNumGlobals);
 
     uint32_t NumGlobals = Globals.size();
-    writeSingleEl(InputOut, NumGlobals);
+    writeV(InputOut, NumGlobals);
 
     for (uint32_t I = 0; I < NumGlobals; ++I) {
-      writeSingleEl(InputOut, (uint32_t)Globals[I]);
+      writeV<uint32_t>(InputOut, Globals[I]);
     }
 
-    // std::map<VoidPtrTy , std::pair<uintptr_t, uint32_t>> ValMap;
-    // auto End = TrimmedObjs.end();
-    // if (TrimmedObjs.empty() && !Heap->ValMap.empty()) {
-    //   printf("Problem, no objects!");
-    //   exit(2);
-    // }
+    for (auto &It : Objects) {
+      writeV<uintptr_t>(InputOut, It->Ptrs.size());
+      for (size_t Jt = 0; Jt < It->Ptrs.size(); Jt++)
+        writeV<intptr_t>(InputOut, It->Ptrs[Jt]);
+    }
 
-    // uint32_t NumVals = Heap->ValMap.size();
-    // writeSingleEl(InputOut, NumVals);
-
-    // for (auto &ValIt : Heap->ValMap) {
-    //   auto It = TrimmedObjs.upper_bound(ValIt.first);
-    //   if (It == TrimmedObjs.begin()) {
-    //     printf("Problem, it is begin()");
-    //     exit(3);
-    //   }
-    //   --It;
-    //   ptrdiff_t Offset = reinterpret_cast<char *>(ValIt.first) -
-    //                      reinterpret_cast<char *>(It->second->begin());
-    //   assert(Offset >= 0);
-    //   writeSingleEl(InputOut, It->second->Idx);
-    //   writeSingleEl(InputOut, Offset);
-    //   auto PtrIt = Heap->PtrMap.find(ValIt.first);
-
-    //   // Write the obj idx next if its a pointer or the value
-    //   enum Kind : uint32_t {
-    //     IDX = 0,
-    //     CONTENT = 1,
-    //   };
-    //   uintptr_t Content;
-    //   if (PtrIt != Heap->PtrMap.end()) {
-    //     writeSingleEl(InputOut, /* Enum */ Kind::IDX);
-    //     Content = PtrIt->second;
-    //   } else {
-    //     writeSingleEl(InputOut, /* Enum */ Kind::CONTENT);
-    //     Content = ValIt.second.first;
-    //   }
-    //   if (VERBOSE)
-    //     printf("%lu ---> %lu [%i]\n", Offset, Content,
-    //            (PtrIt == Heap->PtrMap.end()));
-    //   writeSingleEl(InputOut, Content);
-    //   // Write the size
-    //   writeSingleEl(InputOut, ValIt.second.second);
-    // }
-
-    // uint32_t NumArgs = Args.size();
-    // writeSingleEl(InputOut, NumArgs);
-    // for (auto &Arg : Args) {
-    //   writeSingleEl(InputOut, Arg.Content);
-    //   writeSingleEl(InputOut, Arg.ObjIdx);
-    // }
+    uint32_t NumArgs = Args.size();
+    writeV<uint32_t>(InputOut, NumArgs);
+    for (auto &Arg : Args) {
+      writeV<uintptr_t>(InputOut, Arg.Content);
+      writeV<int32_t>(InputOut, Arg.ObjIdx);
+      writeV<int32_t>(InputOut, Arg.IsPtr);
+    }
 
     // uint32_t NumGetObjects = GetObjects.size();
-    // writeSingleEl(InputOut, NumGetObjects);
+    // writeV(InputOut, NumGetObjects);
     // for (auto ObjIdx : GetObjects) {
-    //   writeSingleEl(InputOut, ObjIdx);
+    //   writeV(InputOut, ObjIdx);
     // }
   }
 };
@@ -502,7 +435,7 @@ static InputGenRTTy &getInputGenRT() { return *InputGenRT; }
 
 template <typename T> T ObjectTy::read(VoidPtrTy Ptr, uint32_t Size) {
   intptr_t Offset = reinterpret_cast<intptr_t>(Ptr) -
-                    reinterpret_cast<intptr_t>(getBasePtr());
+                    reinterpret_cast<intptr_t>(getObjBasePtr());
   bool WasAllocated = ensureAllocation(Offset, Size);
 
   T *OutputLoc =
@@ -633,7 +566,8 @@ RWREF(long double, x86_fp80)
   TY __inputgen_arg_##NAME() {                                                 \
     int32_t ObjIdx = -1;                                                       \
     getInputGenRT().Args.push_back(                                            \
-        toArgTy<TY>(getInputGenRT().getNewValue<TY>(&ObjIdx), ObjIdx));        \
+        toArgTy<TY>(getInputGenRT().getNewValue<TY>(&ObjIdx), ObjIdx,          \
+                    std::is_pointer<TY>::value));                              \
     return fromArgTy<TY>(getInputGenRT().Args.back());                         \
   }
 
@@ -645,8 +579,8 @@ ARG(int64_t, i64)
 ARG(float, float)
 ARG(double, double)
 ARG(VoidPtrTy, ptr)
-ARG(__int128, i128)
-ARG(long double, x86_fp80)
+// ARG(__int128, i128)
+// ARG(long double, x86_fp80)
 #undef ARG
 
 VoidPtrTy __inputgen_translate_ptr(VoidPtrTy Ptr) {
