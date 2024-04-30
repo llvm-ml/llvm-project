@@ -316,7 +316,7 @@ struct InputGenRTTy {
       VoidPtrTy Ptr =
           localPtrToGlobalPtr(ObjIdx, Objects[ObjIdx]->getBasePtr());
       if (VERBOSE)
-        printf("New Obj at ptr %p\n", Ptr);
+        printf("New Obj at ptr %p\n", (void *)Ptr);
       return Ptr;
     }
     if (VERBOSE)
@@ -339,8 +339,8 @@ struct InputGenRTTy {
     size_t Idx = getNewObj(GlobalSize, false);
     Globals.push_back(Idx);
     if (VERBOSE)
-      printf("Global %p replaced with Obj %zu @ %p\n", Global, Idx,
-             (VoidPtrTy)ReplGlobal);
+      printf("Global %p replaced with Obj %zu @ %p\n", (void *)Global, Idx,
+             (void *)ReplGlobal);
     *ReplGlobal = localPtrToGlobalPtr(Idx, Objects[Idx]->getBasePtr());
   }
 
@@ -655,7 +655,6 @@ VoidPtrTy __inputgen_translate_ptr(VoidPtrTy Ptr) {
 
 // TODO Need to rename this when instrumenting
 // void free(VoidPtrTy) {}
-
 }
 
 int main(int argc, char **argv) {
