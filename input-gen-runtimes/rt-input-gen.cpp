@@ -75,14 +75,14 @@ struct ObjectTy {
   template <typename T> void write(T Val, VoidPtrTy Ptr, uint32_t Size) {
     intptr_t Offset = getOffsetFromObjBasePtr(Ptr);
     ensureAllocation(Offset, Size);
-    markUsed(Offset, Size);
-
     if constexpr (std::is_pointer<T>::value)
-      Ptrs.push_back(Offset);
+      if (!allUsed(Offset, Size))
+        Ptrs.insert(Offset);
+    markUsed(Offset, Size);
   }
 
   const size_t Idx;
-  std::vector<intptr_t> Ptrs;
+  std::set<intptr_t> Ptrs;
 
 private:
   intptr_t AllocationSize = 0;
@@ -291,7 +291,7 @@ struct InputGenRTTy {
       size_t ObjIdx = getNewObj(1024 * 1024, true);
       VoidPtrTy Ptr = localPtrToGlobalPtr(ObjIdx, getObjBasePtr());
       if (VERBOSE)
-        printf("New Obj at ptr %p\n", (void *)Ptr);
+        printf("New Obj #%lu at ptr %p\n", ObjIdx, (void *)Ptr);
       return Ptr;
     }
     if (VERBOSE)
@@ -380,7 +380,7 @@ struct InputGenRTTy {
     for (auto &Obj : Objects) {
       auto MemoryChunk = Obj->getAlignedInputMemory();
       if (VERBOSE)
-        printf("Obj %zu aligned memory chunk at %p, size %lu\n", Obj->Idx,
+        printf("Obj #%zu aligned memory chunk at %p, size %lu\n", Obj->Idx,
                (void *)MemoryChunk.Ptr, MemoryChunk.Size);
       writeV<intptr_t>(InputOut, Obj->Idx);
       writeV<intptr_t>(InputOut, MemoryChunk.Size);
@@ -414,13 +414,13 @@ struct InputGenRTTy {
       writeV<uintptr_t>(InputOut, Obj->Ptrs.size());
       if (VERBOSE)
         printf("O #%ld NP %ld\n", Obj->Idx, Obj->Ptrs.size());
-      for (size_t I = 0; I < Obj->Ptrs.size(); I++) {
-        writeV<intptr_t>(InputOut, Obj->Ptrs[I]);
+      for (auto Ptr : Obj->Ptrs) {
+        writeV<intptr_t>(InputOut, Ptr);
         if (VERBOSE)
-          printf("P at %ld : %p\n", Obj->Ptrs[I],
+          printf("P at %ld : %p\n", Ptr,
                  *reinterpret_cast<void **>(MemoryChunks[Obj->Idx].Ptr +
                                             MemoryChunks[Obj->Idx].Offset +
-                                            Obj->Ptrs[I]));
+                                            Ptr));
       }
 
       assert(Obj->Idx == I);
@@ -462,7 +462,7 @@ template <typename T> T ObjectTy::read(VoidPtrTy Ptr, uint32_t Size) {
   storeGeneratedValue(Val, Offset, Size);
 
   if constexpr (std::is_pointer<T>::value)
-    Ptrs.push_back(Offset);
+    Ptrs.insert(Offset);
 
   return *OutputLoc;
 }
