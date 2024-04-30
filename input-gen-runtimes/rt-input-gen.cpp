@@ -27,6 +27,8 @@ static constexpr intptr_t ObjAlignment = 16;
 static constexpr intptr_t PtrInObjMask = MaxObjectSize - 1;
 static constexpr intptr_t ObjIdxMask = ~(PtrInObjMask);
 
+typedef uint8_t *VoidPtrTy;
+
 template <typename T> static T alignStart(T Ptr) {
   intptr_t IPtr = reinterpret_cast<intptr_t>(Ptr);
   return reinterpret_cast<T>(IPtr / ObjAlignment * ObjAlignment);
@@ -38,11 +40,11 @@ template <typename T> static T alignEnd(T Ptr) {
                                     ObjAlignment);
 }
 
-static void *advance(void *Ptr, uint64_t Bytes) {
+static VoidPtrTy advance(VoidPtrTy Ptr, uint64_t Bytes) {
   return reinterpret_cast<uint8_t *>(Ptr) + Bytes;
 }
 
-static intptr_t diff(void *LHS, void *RHS) {
+static intptr_t diff(VoidPtrTy LHS, VoidPtrTy RHS) {
   return reinterpret_cast<uint8_t *>(LHS) - reinterpret_cast<uint8_t *>(RHS);
 }
 
@@ -55,17 +57,17 @@ struct ObjectTy {
   }
 
   struct AlignedMemoryChunk {
-    void *Ptr;
+    VoidPtrTy Ptr;
     intptr_t Size;
     intptr_t Offset;
   };
 
   AlignedMemoryChunk getAlignedInputMemory() {
-    void *Start = Input;
+    VoidPtrTy Start = Input;
     while (!anyUsed(Start, ObjAlignment)) {
       Start = advance(Start, ObjAlignment);
     }
-    void *End = advance(Input, AllocationSize - ObjAlignment);
+    VoidPtrTy End = advance(Input, AllocationSize - ObjAlignment);
     while (!anyUsed(End, ObjAlignment)) {
       End = advance(End, -ObjAlignment);
     }
@@ -74,21 +76,23 @@ struct ObjectTy {
   }
 
   uintptr_t getSize() const { return AllocationSize; }
-  void *begin() { return Input; }
-  void *end() { return advance(Input, AllocationSize); }
+  VoidPtrTy begin() { return Input; }
+  VoidPtrTy end() { return advance(Input, AllocationSize); }
 
-  void *getBasePtr() { return reinterpret_cast<void *>(MaxObjectSize / 2); }
-  void *getRealPtr(void *Ptr) {
-    intptr_t Offset = reinterpret_cast<intptr_t>(Ptr) -
-                      reinterpret_cast<intptr_t>(getBasePtr());
-    return advance(Output, Offset - AllocationOffset);
+  VoidPtrTy getBasePtr() {
+    return reinterpret_cast<VoidPtrTy>(MaxObjectSize / 2);
   }
 
-  template <typename T> T read(void *Ptr, uint32_t Size);
+  VoidPtrTy getRealPtr(VoidPtrTy Ptr) {
+    return advance(Output, getOffset(Ptr) - AllocationOffset);
+  }
 
-  template <typename T> void write(T Val, void *Ptr, uint32_t Size) {
-    intptr_t Offset = reinterpret_cast<intptr_t>(Ptr) -
-                      reinterpret_cast<intptr_t>(getBasePtr());
+  intptr_t getOffset(VoidPtrTy Ptr) { return Ptr - getBasePtr(); }
+
+  template <typename T> T read(VoidPtrTy Ptr, uint32_t Size);
+
+  template <typename T> void write(T Val, VoidPtrTy Ptr, uint32_t Size) {
+    intptr_t Offset = getOffset(Ptr);
     ensureAllocation(Offset, Size);
     markUsed(Offset, Size);
 
@@ -102,8 +106,8 @@ struct ObjectTy {
 private:
   intptr_t AllocationSize = 0;
   intptr_t AllocationOffset = 0;
-  void *Output = nullptr;
-  void *Input = nullptr;
+  VoidPtrTy Output = nullptr;
+  VoidPtrTy Input = nullptr;
   // TODO make this a bit-vector
   uint8_t *Used = nullptr;
 
@@ -115,7 +119,7 @@ private:
     return false;
   }
 
-  bool anyUsed(void *Ptr, uint32_t Size) {
+  bool anyUsed(VoidPtrTy Ptr, uint32_t Size) {
     return anyUsed(diff(Ptr, Input), Size);
   }
 
@@ -127,7 +131,7 @@ private:
     return false;
   }
 
-  bool allUsed(void *Ptr, uint32_t Size) {
+  bool allUsed(VoidPtrTy Ptr, uint32_t Size) {
     return allUsed(diff(Ptr, Input), Size);
   }
 
@@ -161,10 +165,8 @@ private:
     memcpy(Bytes, &Val, sizeof(Val));
     for (unsigned It = 0; It < sizeof(Val); It++) {
       if (!allUsed(Offset + It, 1)) {
-        uint8_t *OutputLoc = reinterpret_cast<uint8_t *>(
-            advance(Output, -AllocationOffset + Offset + It));
-        uint8_t *InputLoc = reinterpret_cast<uint8_t *>(
-            advance(Input, -AllocationOffset + Offset + It));
+        VoidPtrTy OutputLoc = Output - AllocationOffset + Offset + It;
+        VoidPtrTy InputLoc = Input - AllocationOffset + Offset + It;
         *OutputLoc = Bytes[It];
         *InputLoc = Bytes[It];
         markUsed(Offset + It, 1);
@@ -288,12 +290,12 @@ struct InputGenRTTy {
     return V;
   }
 
-  void *localPtrToGlobalPtr(size_t ObjIdx, void *PtrInObj) {
-    return reinterpret_cast<void *>((ObjIdx * MaxObjectSize) |
-                                    reinterpret_cast<intptr_t>(PtrInObj));
+  VoidPtrTy localPtrToGlobalPtr(size_t ObjIdx, VoidPtrTy PtrInObj) {
+    return reinterpret_cast<VoidPtrTy>((ObjIdx * MaxObjectSize) |
+                                       reinterpret_cast<intptr_t>(PtrInObj));
   }
 
-  ObjectTy *globalPtrToObj(void *GlobalPtr) {
+  ObjectTy *globalPtrToObj(VoidPtrTy GlobalPtr) {
     size_t Idx =
         (reinterpret_cast<intptr_t>(GlobalPtr) & ObjIdxMask) / MaxObjectSize;
     // Idx > 0 because Idx = 0 is the NULL pointer (object).
@@ -301,16 +303,18 @@ struct InputGenRTTy {
     return Objects[Idx].get();
   }
 
-  void *globalPtrToLocalPtr(void *GlobalPtr) {
-    return reinterpret_cast<void *>(reinterpret_cast<intptr_t>(GlobalPtr) &
-                                    PtrInObjMask);
+  VoidPtrTy globalPtrToLocalPtr(VoidPtrTy GlobalPtr) {
+    return reinterpret_cast<VoidPtrTy>(reinterpret_cast<intptr_t>(GlobalPtr) &
+                                       PtrInObjMask);
   }
 
-  template <> void *getNewValue<void *>(int32_t *ObjIdx, bool Stub, int Max) {
+  template <>
+  VoidPtrTy getNewValue<VoidPtrTy>(int32_t *ObjIdx, bool Stub, int Max) {
     NumNewValues++;
     if (rand(Stub) % 50) {
       size_t ObjIdx = getNewObj(1024 * 1024, true);
-      void *Ptr = localPtrToGlobalPtr(ObjIdx, Objects[ObjIdx]->getBasePtr());
+      VoidPtrTy Ptr =
+          localPtrToGlobalPtr(ObjIdx, Objects[ObjIdx]->getBasePtr());
       if (VERBOSE)
         printf("New Obj at ptr %p\n", Ptr);
       return Ptr;
@@ -320,26 +324,27 @@ struct InputGenRTTy {
     return nullptr;
   }
 
-  template <typename T> void write(void *Ptr, T Val, uint32_t Size) {
+  template <typename T> void write(VoidPtrTy Ptr, T Val, uint32_t Size) {
     ObjectTy *Obj = globalPtrToObj(Ptr);
     Obj->write<T>(Val, globalPtrToLocalPtr(Ptr), Size);
   }
 
-  template <typename T> T read(void *Ptr, void *Base, uint32_t Size) {
+  template <typename T> T read(VoidPtrTy Ptr, VoidPtrTy Base, uint32_t Size) {
     ObjectTy *Obj = globalPtrToObj(Ptr);
     return Obj->read<T>(globalPtrToLocalPtr(Ptr), Size);
   }
 
-  void registerGlobal(void *Global, void **ReplGlobal, int32_t GlobalSize) {
+  void registerGlobal(VoidPtrTy Global, VoidPtrTy *ReplGlobal,
+                      int32_t GlobalSize) {
     size_t Idx = getNewObj(GlobalSize, false);
     Globals.push_back(Idx);
     if (VERBOSE)
       printf("Global %p replaced with Obj %zu @ %p\n", Global, Idx,
-             (void *)ReplGlobal);
+             (VoidPtrTy)ReplGlobal);
     *ReplGlobal = localPtrToGlobalPtr(Idx, Objects[Idx]->getBasePtr());
   }
 
-  void *translatePtr(void *GlobalPtr) {
+  VoidPtrTy translatePtr(VoidPtrTy GlobalPtr) {
     return globalPtrToObj(GlobalPtr)->getRealPtr(
         globalPtrToLocalPtr(GlobalPtr));
   }
@@ -403,12 +408,12 @@ struct InputGenRTTy {
     uint32_t NumObjects = Objects.size();
     writeSingleEl(InputOut, NumObjects);
 
-    std::map<uint64_t, void *> Remap;
+    std::map<uint64_t, VoidPtrTy> Remap;
     for (auto &It : Objects) {
       auto MemoryChunk = It->getAlignedInputMemory();
       if (VERBOSE)
         printf("Obj %zu aligned memory chunk at %p, size %lu\n", It->Idx,
-               MemoryChunk.Ptr, MemoryChunk.Size);
+               (void *)MemoryChunk.Ptr, MemoryChunk.Size);
       writeSingleEl(InputOut, MemoryChunk.Size);
       writeSingleEl(InputOut, MemoryChunk.Offset);
       InputOut.write(reinterpret_cast<char *>(MemoryChunk.Ptr),
@@ -430,7 +435,7 @@ struct InputGenRTTy {
       writeSingleEl(InputOut, (uint32_t)Globals[I]);
     }
 
-    // std::map<void *, std::pair<uintptr_t, uint32_t>> ValMap;
+    // std::map<VoidPtrTy , std::pair<uintptr_t, uint32_t>> ValMap;
     auto End = TrimmedObjs.end();
     if (TrimmedObjs.empty() && !Heap->ValMap.empty()) {
       printf("Problem, no objects!");
@@ -495,7 +500,7 @@ static InputGenRTTy *InputGenRT;
 
 static InputGenRTTy &getInputGenRT() { return *InputGenRT; }
 
-template <typename T> T ObjectTy::read(void *Ptr, uint32_t Size) {
+template <typename T> T ObjectTy::read(VoidPtrTy Ptr, uint32_t Size) {
   intptr_t Offset = reinterpret_cast<intptr_t>(Ptr) -
                     reinterpret_cast<intptr_t>(getBasePtr());
   bool WasAllocated = ensureAllocation(Offset, Size);
@@ -521,26 +526,27 @@ void __inputgen_deinit() {
   // getInputGenRT().init();
 }
 
-void __inputgen_global(int32_t NumGlobals, void *Global, void **ReplGlobal,
-                       int32_t GlobalSize) {
+void __inputgen_global(int32_t NumGlobals, VoidPtrTy Global,
+                       VoidPtrTy *ReplGlobal, int32_t GlobalSize) {
   getInputGenRT().registerGlobal(Global, ReplGlobal, GlobalSize);
 }
 
-void *__inputgen_memmove(void *Tgt, void *Src, uint64_t N) {
-  char *SrcIt = (char *)Src;
-  char *TgtIt = (char *)Tgt;
+// TODO: need to support overlapping Tgt and Src here
+VoidPtrTy __inputgen_memmove(VoidPtrTy Tgt, VoidPtrTy Src, uint64_t N) {
+  VoidPtrTy SrcIt = Src;
+  VoidPtrTy TgtIt = Tgt;
   for (uintptr_t I = 0; I < N; ++I, ++SrcIt, ++TgtIt) {
     auto V = getInputGenRT().read<char>(SrcIt, Src, sizeof(char));
     getInputGenRT().write<char>(TgtIt, V, sizeof(char));
   }
   return TgtIt;
 }
-void *__inputgen_memcpy(void *Tgt, void *Src, uint64_t N) {
+VoidPtrTy __inputgen_memcpy(VoidPtrTy Tgt, VoidPtrTy Src, uint64_t N) {
   return __inputgen_memmove(Tgt, Src, N);
 }
 
-void *__inputgen_memset(void *Tgt, char C, uint64_t N) {
-  char *TgtIt = (char *)Tgt;
+VoidPtrTy __inputgen_memset(VoidPtrTy Tgt, char C, uint64_t N) {
+  VoidPtrTy TgtIt = Tgt;
   for (uintptr_t I = 0; I < N; ++I, ++TgtIt) {
     getInputGenRT().write<char>(TgtIt, C, sizeof(char));
   }
@@ -555,8 +561,8 @@ void *__inputgen_memset(void *Tgt, char C, uint64_t N) {
       GetObjects.push_back(ObjIdx);                                            \
     return V;                                                                  \
   }                                                                            \
-  void __inputgen_access_##NAME(void *Ptr, int64_t Val, int32_t Size,          \
-                                void *Base, int32_t Kind) {                    \
+  void __inputgen_access_##NAME(VoidPtrTy Ptr, int64_t Val, int32_t Size,      \
+                                VoidPtrTy Base, int32_t Kind) {                \
     switch (Kind) {                                                            \
     case 0:                                                                    \
       getInputGenRT().read<TY>(Ptr, Base, Size);                               \
@@ -573,20 +579,20 @@ void *__inputgen_memset(void *Tgt, char C, uint64_t N) {
       } else {                                                                 \
         TyVal = (TY)Val;                                                       \
       }                                                                        \
-      getInputGenRT().write<TY>((TY *)Ptr, TyVal, Size);                       \
+      getInputGenRT().write<TY>(Ptr, TyVal, Size);                             \
       return;                                                                  \
     default:                                                                   \
       abort();                                                                 \
     }                                                                          \
   }                                                                            \
-  void __record_read_##NAME(void *Ptr, int64_t Val, int32_t Size, void *Base,  \
-                            int32_t Kind) {                                    \
+  void __record_read_##NAME(VoidPtrTy Ptr, int64_t Val, int32_t Size,          \
+                            VoidPtrTy Base, int32_t Kind) {                    \
     switch (Kind) {                                                            \
     case 0:                                                                    \
       getInputGenRT().read<TY>(Ptr, Base, Size);                               \
       return;                                                                  \
     case 1:                                                                    \
-      getInputGenRT().write<TY>((TY *)Ptr, (TY)Val, Size);                     \
+      getInputGenRT().write<TY>(Ptr, (TY)Val, Size);                           \
       return;                                                                  \
     default:                                                                   \
       abort();                                                                 \
@@ -594,8 +600,8 @@ void *__inputgen_memset(void *Tgt, char C, uint64_t N) {
   }
 
 #define RWREF(TY, NAME)                                                        \
-  void __inputgen_access_##NAME(void *Ptr, int64_t Val, int32_t Size,          \
-                                void *Base, int32_t Kind) {                    \
+  void __inputgen_access_##NAME(VoidPtrTy Ptr, int64_t Val, int32_t Size,      \
+                                VoidPtrTy Base, int32_t Kind) {                \
     static_assert(sizeof(TY) > 8);                                             \
     TY TyVal;                                                                  \
     switch (Kind) {                                                            \
@@ -604,7 +610,7 @@ void *__inputgen_memset(void *Tgt, char C, uint64_t N) {
       return;                                                                  \
     case 1:                                                                    \
       TyVal = *(TY *)Val;                                                      \
-      getInputGenRT().write<TY>((TY *)Ptr, TyVal, Size);                       \
+      getInputGenRT().write<TY>(Ptr, TyVal, Size);                             \
       return;                                                                  \
     default:                                                                   \
       abort();                                                                 \
@@ -618,7 +624,7 @@ RW(int32_t, i32)
 RW(int64_t, i64)
 RW(float, float)
 RW(double, double)
-RW(void *, ptr)
+RW(VoidPtrTy, ptr)
 RWREF(__int128, i128)
 RWREF(long double, x86_fp80)
 #undef RW
@@ -638,16 +644,16 @@ ARG(int32_t, i32)
 ARG(int64_t, i64)
 ARG(float, float)
 ARG(double, double)
-ARG(void *, ptr)
+ARG(VoidPtrTy, ptr)
 ARG(__int128, i128)
 ARG(long double, x86_fp80)
 #undef ARG
 
-void *__inputgen_translate_ptr(void *Ptr) {
+VoidPtrTy __inputgen_translate_ptr(VoidPtrTy Ptr) {
   return getInputGenRT().translatePtr(Ptr);
 }
 
-void free(void *) {}
+void free(VoidPtrTy) {}
 }
 
 int main(int argc, char **argv) {
