@@ -174,7 +174,7 @@ InputGenInstrumenter::isInterestingMemoryAccess(Instruction *I) const {
     Access.V = SI->getValueOperand();
     Access.AccessTy = SI->getValueOperand()->getType();
     Access.Addr = SI->getPointerOperand();
-    Access.AddrOperandNo = 0;
+    Access.AddrOperandNo = 1;
   } else if (AtomicRMWInst *RMW = dyn_cast<AtomicRMWInst>(I)) {
     Access.Kind = InterestingMemoryAccess::READ_THEN_WRITE;
     Access.V = RMW->getValOperand();
