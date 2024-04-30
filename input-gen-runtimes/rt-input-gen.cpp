@@ -436,62 +436,62 @@ struct InputGenRTTy {
     }
 
     // std::map<VoidPtrTy , std::pair<uintptr_t, uint32_t>> ValMap;
-    auto End = TrimmedObjs.end();
-    if (TrimmedObjs.empty() && !Heap->ValMap.empty()) {
-      printf("Problem, no objects!");
-      exit(2);
-    }
+    // auto End = TrimmedObjs.end();
+    // if (TrimmedObjs.empty() && !Heap->ValMap.empty()) {
+    //   printf("Problem, no objects!");
+    //   exit(2);
+    // }
 
-    uint32_t NumVals = Heap->ValMap.size();
-    writeSingleEl(InputOut, NumVals);
+    // uint32_t NumVals = Heap->ValMap.size();
+    // writeSingleEl(InputOut, NumVals);
 
-    for (auto &ValIt : Heap->ValMap) {
-      auto It = TrimmedObjs.upper_bound(ValIt.first);
-      if (It == TrimmedObjs.begin()) {
-        printf("Problem, it is begin()");
-        exit(3);
-      }
-      --It;
-      ptrdiff_t Offset = reinterpret_cast<char *>(ValIt.first) -
-                         reinterpret_cast<char *>(It->second->begin());
-      assert(Offset >= 0);
-      writeSingleEl(InputOut, It->second->Idx);
-      writeSingleEl(InputOut, Offset);
-      auto PtrIt = Heap->PtrMap.find(ValIt.first);
+    // for (auto &ValIt : Heap->ValMap) {
+    //   auto It = TrimmedObjs.upper_bound(ValIt.first);
+    //   if (It == TrimmedObjs.begin()) {
+    //     printf("Problem, it is begin()");
+    //     exit(3);
+    //   }
+    //   --It;
+    //   ptrdiff_t Offset = reinterpret_cast<char *>(ValIt.first) -
+    //                      reinterpret_cast<char *>(It->second->begin());
+    //   assert(Offset >= 0);
+    //   writeSingleEl(InputOut, It->second->Idx);
+    //   writeSingleEl(InputOut, Offset);
+    //   auto PtrIt = Heap->PtrMap.find(ValIt.first);
 
-      // Write the obj idx next if its a pointer or the value
-      enum Kind : uint32_t {
-        IDX = 0,
-        CONTENT = 1,
-      };
-      uintptr_t Content;
-      if (PtrIt != Heap->PtrMap.end()) {
-        writeSingleEl(InputOut, /* Enum */ Kind::IDX);
-        Content = PtrIt->second;
-      } else {
-        writeSingleEl(InputOut, /* Enum */ Kind::CONTENT);
-        Content = ValIt.second.first;
-      }
-      if (VERBOSE)
-        printf("%lu ---> %lu [%i]\n", Offset, Content,
-               (PtrIt == Heap->PtrMap.end()));
-      writeSingleEl(InputOut, Content);
-      // Write the size
-      writeSingleEl(InputOut, ValIt.second.second);
-    }
+    //   // Write the obj idx next if its a pointer or the value
+    //   enum Kind : uint32_t {
+    //     IDX = 0,
+    //     CONTENT = 1,
+    //   };
+    //   uintptr_t Content;
+    //   if (PtrIt != Heap->PtrMap.end()) {
+    //     writeSingleEl(InputOut, /* Enum */ Kind::IDX);
+    //     Content = PtrIt->second;
+    //   } else {
+    //     writeSingleEl(InputOut, /* Enum */ Kind::CONTENT);
+    //     Content = ValIt.second.first;
+    //   }
+    //   if (VERBOSE)
+    //     printf("%lu ---> %lu [%i]\n", Offset, Content,
+    //            (PtrIt == Heap->PtrMap.end()));
+    //   writeSingleEl(InputOut, Content);
+    //   // Write the size
+    //   writeSingleEl(InputOut, ValIt.second.second);
+    // }
 
-    uint32_t NumArgs = Args.size();
-    writeSingleEl(InputOut, NumArgs);
-    for (auto &Arg : Args) {
-      writeSingleEl(InputOut, Arg.Content);
-      writeSingleEl(InputOut, Arg.ObjIdx);
-    }
+    // uint32_t NumArgs = Args.size();
+    // writeSingleEl(InputOut, NumArgs);
+    // for (auto &Arg : Args) {
+    //   writeSingleEl(InputOut, Arg.Content);
+    //   writeSingleEl(InputOut, Arg.ObjIdx);
+    // }
 
-    uint32_t NumGetObjects = GetObjects.size();
-    writeSingleEl(InputOut, NumGetObjects);
-    for (auto ObjIdx : GetObjects) {
-      writeSingleEl(InputOut, ObjIdx);
-    }
+    // uint32_t NumGetObjects = GetObjects.size();
+    // writeSingleEl(InputOut, NumGetObjects);
+    // for (auto ObjIdx : GetObjects) {
+    //   writeSingleEl(InputOut, ObjIdx);
+    // }
   }
 };
 
@@ -653,7 +653,9 @@ VoidPtrTy __inputgen_translate_ptr(VoidPtrTy Ptr) {
   return getInputGenRT().translatePtr(Ptr);
 }
 
-void free(VoidPtrTy) {}
+// TODO Need to rename this when instrumenting
+// void free(VoidPtrTy) {}
+
 }
 
 int main(int argc, char **argv) {
