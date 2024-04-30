@@ -418,8 +418,9 @@ struct InputGenRTTy {
         writeV<intptr_t>(InputOut, Obj->Ptrs[I]);
         if (VERBOSE)
           printf("P at %ld : %p\n", Obj->Ptrs[I],
-                 *reinterpret_cast<void **>(MemoryChunks[Obj->Idx].Ptr + MemoryChunks[Obj->Idx].Offset +
-                          Obj->Ptrs[I]));
+                 *reinterpret_cast<void **>(MemoryChunks[Obj->Idx].Ptr +
+                                            MemoryChunks[Obj->Idx].Offset +
+                                            Obj->Ptrs[I]));
       }
 
       assert(Obj->Idx == I);
