@@ -8,11 +8,27 @@ target triple = "x86_64-unknown-linux-gnu"
 
 %struct.A = type { ptr, i32, float }
 ; Function Attrs: alwaysinline nounwind uwtable
-define hidden i32 @_mm_add_epi32(%struct.A noundef %__a, %struct.A noundef %__b) #0 {
+define hidden i32 @struct(%struct.A noundef %__a, %struct.A noundef %__b) #0 {
 entry:
   %a = extractvalue %struct.A %__a, 1
   %b = extractvalue %struct.A %__b, 1
   %add = add i32 %a, %b
+  ret i32 %add
+}
+
+%struct.B = type { ptr, {i32, {float}, i8} }
+; Function Attrs: alwaysinline nounwind uwtable
+define hidden i32 @nested_struct(%struct.B noundef %__a, %struct.B noundef %__b) #0 {
+entry:
+  %a = extractvalue %struct.B %__a, 1, 0
+  %b = extractvalue %struct.B %__b, 1, 0
+  %add = add i32 %a, %b
+  %i8a = extractvalue %struct.B %__a, 1, 2
+  %i8b = extractvalue %struct.B %__b, 1, 2
+  %i8add = add i8 %i8a, %i8b
+  %f32a = extractvalue %struct.B %__a, 1, 1, 0
+  %f32b = extractvalue %struct.B %__b, 1, 1, 0
+  %f32add = fadd float %f32a, %f32b
   ret i32 %add
 }
 
