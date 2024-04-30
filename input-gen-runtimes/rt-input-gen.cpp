@@ -597,8 +597,10 @@ ARG(int64_t, i64)
 ARG(float, float)
 ARG(double, double)
 ARG(VoidPtrTy, ptr)
-// ARG(__int128, i128)
-// ARG(long double, x86_fp80)
+
+// TODO these currently do not work properly as they are wider than ptr
+ARG(__int128, i128)
+ARG(long double, x86_fp80)
 #undef ARG
 
 VoidPtrTy __inputgen_translate_ptr(VoidPtrTy Ptr) {
