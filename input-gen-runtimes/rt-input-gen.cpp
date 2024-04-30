@@ -63,12 +63,8 @@ struct ObjectTy {
       Start = Start + ObjAlignment;
     while (Start != End && !anyUsed(End - ObjAlignment, ObjAlignment))
       End = End - ObjAlignment;
-    return {Start, diff(End, Start), diff(Start, getObjBasePtr())};
+    return {Start, End - Start, Start - Input};
   }
-
-  uintptr_t getSize() const { return AllocationSize; }
-  VoidPtrTy begin() { return Input; }
-  VoidPtrTy end() { return advance(Input, AllocationSize); }
 
   VoidPtrTy getRealPtr(VoidPtrTy Ptr) {
     return advance(Output, getOffsetFromObjBasePtr(Ptr) - AllocationOffset);
@@ -379,17 +375,23 @@ struct InputGenRTTy {
     uint32_t NumObjects = Objects.size();
     writeV(InputOut, NumObjects);
 
-    std::map<uint64_t, VoidPtrTy> Remap;
-    for (auto &It : Objects) {
-      auto MemoryChunk = It->getAlignedInputMemory();
+    std::vector<ObjectTy::AlignedMemoryChunk> MemoryChunks;
+    uintptr_t I = 0;
+    for (auto &Obj : Objects) {
+      auto MemoryChunk = Obj->getAlignedInputMemory();
       if (VERBOSE)
-        printf("Obj %zu aligned memory chunk at %p, size %lu\n", It->Idx,
+        printf("Obj %zu aligned memory chunk at %p, size %lu\n", Obj->Idx,
                (void *)MemoryChunk.Ptr, MemoryChunk.Size);
+      writeV<intptr_t>(InputOut, Obj->Idx);
       writeV<intptr_t>(InputOut, MemoryChunk.Size);
       writeV<intptr_t>(InputOut, MemoryChunk.Offset);
       InputOut.write(reinterpret_cast<char *>(MemoryChunk.Ptr),
                      MemoryChunk.Size);
       TotalSize += MemoryChunk.Size;
+      MemoryChunks.push_back(MemoryChunk);
+
+      assert(Obj->Idx == I);
+      I++;
     }
 
     if (VERBOSE)
@@ -406,10 +408,22 @@ struct InputGenRTTy {
       writeV<uint32_t>(InputOut, Globals[I]);
     }
 
-    for (auto &It : Objects) {
-      writeV<uintptr_t>(InputOut, It->Ptrs.size());
-      for (size_t Jt = 0; Jt < It->Ptrs.size(); Jt++)
-        writeV<intptr_t>(InputOut, It->Ptrs[Jt]);
+    I = 0;
+    for (auto &Obj : Objects) {
+      writeV<intptr_t>(InputOut, Obj->Idx);
+      writeV<uintptr_t>(InputOut, Obj->Ptrs.size());
+      if (VERBOSE)
+        printf("O #%ld NP %ld\n", Obj->Idx, Obj->Ptrs.size());
+      for (size_t I = 0; I < Obj->Ptrs.size(); I++) {
+        writeV<intptr_t>(InputOut, Obj->Ptrs[I]);
+        if (VERBOSE)
+          printf("P at %ld : %p\n", Obj->Ptrs[I],
+                 *reinterpret_cast<void **>(MemoryChunks[Obj->Idx].Ptr + MemoryChunks[Obj->Idx].Offset +
+                          Obj->Ptrs[I]));
+      }
+
+      assert(Obj->Idx == I);
+      I++;
     }
 
     uint32_t NumArgs = Args.size();
@@ -445,6 +459,9 @@ template <typename T> T ObjectTy::read(VoidPtrTy Ptr, uint32_t Size) {
 
   T Val = getInputGenRT().getNewValue<T>();
   storeGeneratedValue(Val, Offset, Size);
+
+  if constexpr (std::is_pointer<T>::value)
+    Ptrs.push_back(Offset);
 
   return *OutputLoc;
 }

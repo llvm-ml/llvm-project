@@ -98,30 +98,39 @@ int main(int argc, char **argv) {
   };
   std::vector<ObjectTy> Objects;
   for (uint32_t I = 0; I < NumObjects; I++) {
+    auto Idx =  readV<uintptr_t>(Input);
+    assert(I == Idx);
     auto Size = readV<intptr_t>(Input);
     auto Offset = readV<intptr_t>(Input);
     if (VERBOSE)
-      printf("O id %u -> size %ld offset %ld\n", I, Size, Offset);
+      printf("O #%u -> size %ld offset %ld\n", I, Size, Offset);
     Objects.push_back({CurMemory, Offset});
     CurMemory += Size;
-    Input.read(Memory, Size);
+    Input.read(ccast(CurMemory), Size);
   }
 
   auto NumGlobals = readV<uint32_t>(Input);
+  if (VERBOSE)
+    printf("NG %u\n", NumGlobals);
   for (uint32_t I = 0; I < NumGlobals; I++) {
     auto ObjIdx = readV<uint32_t>(Input);
     assert(ObjIdx < NumObjects);
     auto Obj = Objects[ObjIdx];
     VoidPtrTy GlobalMem = Obj.Start + Obj.BaseOffset;
+    // We cannot access globals with negative offsets
     assert(Obj.BaseOffset >= 0);
     Globals.push_back(ccast(GlobalMem));
     if (VERBOSE)
-      printf("G id %u -> id %u, addr %p\n", I, ObjIdx, (void *)GlobalMem);
-    // We cannot access globals with negative offsets
+      printf("G #%u -> #%u, addr %p\n", I, ObjIdx, (void *)GlobalMem);
   }
 
   auto RelocatePointer = [&](VoidPtrTy *PtrLoc, const char *Type) {
     VoidPtrTy GlobalPtr = *PtrLoc;
+    if (GlobalPtr == nullptr) {
+      printf("Relocate %s %p -> %p\n", Type, (void *)GlobalPtr,
+             (void *)nullptr);
+      return;
+    }
     VoidPtrTy LocalPtr = globalPtrToLocalPtr(GlobalPtr);
     ObjectTy Obj = Objects[globalPtrToObjIdx(GlobalPtr)];
     intptr_t Offset = getOffsetFromObjBasePtr(LocalPtr);
@@ -133,7 +142,11 @@ int main(int argc, char **argv) {
   };
 
   for (uint32_t I = 0; I < NumObjects; I++) {
-    auto NumPtrs = readV<uint32_t>(Input);
+    auto Idx = readV<uintptr_t>(Input);
+    assert(Idx == I);
+    auto NumPtrs = readV<uintptr_t>(Input);
+    if (VERBOSE)
+      printf("O #%u NP %lu\n", I, NumPtrs);
     auto Obj = Objects[I];
     for (uintptr_t J = 0; J < NumPtrs; J++) {
       auto PtrOffset = readV<intptr_t>(Input);
@@ -157,7 +170,7 @@ int main(int argc, char **argv) {
       exit(2);
     }
     if (VERBOSE)
-      printf("Arg id %d : %p\n", I, (void *)ArgsMemory);
+      printf("Arg #%d : %p\n", I, (void *)ArgsMemory);
     if (IsPtr)
       RelocatePointer(reinterpret_cast<VoidPtrTy *>(&Content), "Arg");
     memcpy(ArgsMemory + I * sizeof(void *), &Content, sizeof(void *));
