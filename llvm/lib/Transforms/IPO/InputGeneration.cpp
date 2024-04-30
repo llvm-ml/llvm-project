@@ -864,34 +864,36 @@ void InputGenInstrumenter::createRunEntryPoint(Function &F, bool UniqName) {
     return IRB.CreateGEP(PtrTy, ArgsPtr, {IRB.getInt64(Idx++)});
   };
   SmallVector<Value *> Args;
-  for (auto &Arg : F.args()) {
-    if (auto *ST = dyn_cast<StructType>(Arg.getType())) {
+  std::function<Value *(Type * T)> HandleType;
+  HandleType = [&](Type *T) -> Value * {
+    if (auto *ST = dyn_cast<StructType>(T)) {
       Value *V = UndefValue::get(ST);
       for (unsigned It = 0; It < ST->getNumElements(); It++) {
-        Value *ElPtr = GetNext();
         Type *ElTy = ST->getElementType(It);
-        V = IRB.CreateInsertValue(V, IRB.CreateLoad(ElTy, ElPtr), {It});
+        V = IRB.CreateInsertValue(V, HandleType(ElTy), {It});
       }
-      Args.push_back(V);
-    } else if (auto *VT = dyn_cast<VectorType>(Arg.getType())) {
+      return V;
+    } else if (auto *VT = dyn_cast<VectorType>(T)) {
       Type *ElTy = VT->getElementType();
       if (!VT->getElementCount().isScalable()) {
         auto Count = VT->getElementCount().getFixedValue();
         Value *V = UndefValue::get(VT);
         for (unsigned It = 0; It < Count; It++) {
-          Value *ElPtr = GetNext();
-          V = IRB.CreateInsertElement(V, IRB.CreateLoad(ElTy, ElPtr),
-                                      IRB.getInt64(It));
+          V = IRB.CreateInsertElement(V, HandleType(ElTy), IRB.getInt64(It));
         }
+        return V;
         Args.push_back(V);
       } else {
         llvm_unreachable("Scalable vectors unsupported.");
       }
     } else {
       Value *ArgPtr = GetNext();
-      Type *ElTy = Arg.getType();
-      Args.push_back(IRB.CreateLoad(ElTy, ArgPtr));
+      Type *ElTy = T;
+      return IRB.CreateLoad(ElTy, ArgPtr);
     }
+  };
+  for (auto &Arg : F.args()) {
+    Args.push_back(HandleType(Arg.getType()));
   }
   IRB.CreateCall(FunctionCallee(F.getFunctionType(), &F), Args, "");
 }
