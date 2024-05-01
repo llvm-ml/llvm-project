@@ -86,6 +86,8 @@ int main(int argc, char **argv) {
   ObjectAddressing OA;
   OA.setSize(OASize);
 
+  auto ObjIdxOffset = readV<uintptr_t>(Input);
+
   auto Seed = readV<uint32_t>(Input);
   Gen.seed(Seed);
 
@@ -136,7 +138,7 @@ int main(int argc, char **argv) {
       return;
     }
     VoidPtrTy LocalPtr = OA.globalPtrToLocalPtr(GlobalPtr);
-    ObjectTy Obj = Objects[OA.globalPtrToObjIdx(GlobalPtr)];
+    ObjectTy Obj = Objects[OA.globalPtrToObjIdx(GlobalPtr) - ObjIdxOffset];
     intptr_t Offset = OA.getOffsetFromObjBasePtr(LocalPtr);
     VoidPtrTy RealPtr = Obj.Start + Obj.BaseOffset + Offset;
     *PtrLoc = RealPtr;

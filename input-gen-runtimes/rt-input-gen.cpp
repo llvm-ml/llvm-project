@@ -59,11 +59,13 @@ struct ObjectTy {
   };
 
   AlignedMemoryChunk getAlignedInputMemory() {
-    VoidPtrTy Start = alignStart(LowestUsedOffset + Input, ObjAlignment);
-    VoidPtrTy End = alignEnd(HighestUsedOffset + Input, ObjAlignment);
+    VoidPtrTy Start =
+        alignStart(LowestUsedOffset + Input - AllocationOffset, ObjAlignment);
+    VoidPtrTy End =
+        alignEnd(HighestUsedOffset + Input - AllocationOffset, ObjAlignment);
     assert(reinterpret_cast<intptr_t>(Start) % ObjAlignment == 0 &&
            reinterpret_cast<intptr_t>(End) % ObjAlignment == 0);
-    return {Start, End - Start, Start - Input};
+    return {Start, End - Start, Start - (Input - AllocationOffset)};
   }
 
   template <typename T> T read(VoidPtrTy Ptr, uint32_t Size);
@@ -204,11 +206,13 @@ struct InputGenRTTy {
     assert(InputMem.allocate(Size, OA.MaxObjectSize));
     assert(UsedMem.allocate(Size, OA.MaxObjectSize));
 
-    ObjIdxOffset = OA.globalPtrToObjIdx(OutputMem.AlignedMemory);
+    OutputObjIdxOffset = OA.globalPtrToObjIdx(OutputMem.AlignedMemory);
+    InputObjIdxOffset = OA.globalPtrToObjIdx(InputMem.AlignedMemory);
   }
   ~InputGenRTTy() { report(); }
 
-  intptr_t ObjIdxOffset;
+  intptr_t OutputObjIdxOffset;
+  intptr_t InputObjIdxOffset;
   int32_t Seed, SeedStub;
   std::string FuncIdent;
   std::string OutputDir;
@@ -265,7 +269,7 @@ struct InputGenRTTy {
   }
 
   ObjectTy *globalPtrToObj(VoidPtrTy GlobalPtr) {
-    size_t Idx = OA.globalPtrToObjIdx(GlobalPtr) - ObjIdxOffset;
+    size_t Idx = OA.globalPtrToObjIdx(GlobalPtr) - OutputObjIdxOffset;
     assert(Idx >= 0 && Idx < Objects.size());
     return Objects[Idx].get();
   }
@@ -275,10 +279,13 @@ struct InputGenRTTy {
     NumNewValues++;
     if (rand(Stub) % 50) {
       size_t ObjIdx = getNewObj(/*ignored currently*/ 1024 * 1024, true);
-      VoidPtrTy Ptr =
-          OA.localPtrToGlobalPtr(ObjIdx + ObjIdxOffset, OA.getObjBasePtr());
-      INPUTGEN_DEBUG(printf("New Obj #%lu at ptr %p\n", ObjIdx, (void *)Ptr));
-      return Ptr;
+      VoidPtrTy OutputPtr = OA.localPtrToGlobalPtr(ObjIdx + OutputObjIdxOffset,
+                                                   OA.getObjBasePtr());
+      VoidPtrTy InputPtr = OA.localPtrToGlobalPtr(ObjIdx + InputObjIdxOffset,
+                                                  OA.getObjBasePtr());
+      INPUTGEN_DEBUG(printf("New Obj #%lu at output ptr %p input ptr %p\n",
+                            ObjIdx, (void *)OutputPtr, (void *)InputPtr));
+      return OutputPtr;
     }
     INPUTGEN_DEBUG(printf("New Obj = nullptr\n"));
     return nullptr;
@@ -300,7 +307,7 @@ struct InputGenRTTy {
     Globals.push_back(Idx);
     INPUTGEN_DEBUG(printf("Global %p replaced with Obj %zu @ %p\n",
                           (void *)Global, Idx, (void *)ReplGlobal));
-    *ReplGlobal = OA.localPtrToGlobalPtr(Idx, OA.getObjBasePtr());
+    *ReplGlobal = OA.localPtrToGlobalPtr(Idx + OutputObjIdxOffset, OA.getObjBasePtr());
   }
 
   VoidPtrTy translatePtr(VoidPtrTy GlobalPtr) { return GlobalPtr; }
@@ -348,6 +355,7 @@ struct InputGenRTTy {
     fprintf(ReportOut, "Objects (%zu total)\n", Objects.size());
 
     writeV<uintptr_t>(InputOut, OA.Size);
+    writeV<uintptr_t>(InputOut, OutputObjIdxOffset);
     writeV<uint32_t>(InputOut, SeedStub);
 
     auto BeforeTotalSize = InputOut.tellp();
@@ -356,14 +364,16 @@ struct InputGenRTTy {
 
     uint32_t NumObjects = Objects.size();
     writeV(InputOut, NumObjects);
+    INPUTGEN_DEBUG(printf("Num Obj %u\n", NumObjects));
 
     std::vector<ObjectTy::AlignedMemoryChunk> MemoryChunks;
     uintptr_t I = 0;
     for (auto &Obj : Objects) {
       auto MemoryChunk = Obj->getAlignedInputMemory();
-      INPUTGEN_DEBUG(printf("Obj #%zu aligned memory chunk at %p, size %lu\n",
-                            Obj->Idx, (void *)MemoryChunk.Ptr,
-                            MemoryChunk.Size));
+      INPUTGEN_DEBUG(
+          printf("Obj #%zu aligned memory chunk at %p, size %lu, offset %lu\n",
+                 Obj->Idx, (void *)MemoryChunk.Ptr, MemoryChunk.Size,
+                 MemoryChunk.Offset));
       writeV<intptr_t>(InputOut, Obj->Idx);
       writeV<intptr_t>(InputOut, MemoryChunk.Size);
       writeV<intptr_t>(InputOut, MemoryChunk.Offset);
@@ -384,9 +394,11 @@ struct InputGenRTTy {
 
     uint32_t NumGlobals = Globals.size();
     writeV(InputOut, NumGlobals);
+    INPUTGEN_DEBUG(printf("Num Glob %u\n", NumGlobals));
 
     for (uint32_t I = 0; I < NumGlobals; ++I) {
       writeV<uint32_t>(InputOut, Globals[I]);
+      INPUTGEN_DEBUG(printf("Glob %u %lu\n", I, Globals[I]));
     }
 
     I = 0;
