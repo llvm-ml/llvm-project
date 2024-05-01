@@ -4,6 +4,17 @@
 #include <cstdint>
 #include <fstream>
 
+namespace {
+extern int VERBOSE;
+}
+
+#define INPUTGEN_DEBUG(X)                                                      \
+  do {                                                                         \
+    if (VERBOSE) {                                                             \
+      X;                                                                       \
+    }                                                                          \
+  } while (0)
+
 // Must be a power of 2
 static constexpr intptr_t MaxObjectSize = 1ULL << 32;
 static constexpr intptr_t MinObjAllocation = 1024;

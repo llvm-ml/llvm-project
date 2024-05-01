@@ -12,7 +12,9 @@
 
 #include "rt.hpp"
 
-static int VERBOSE = 0;
+namespace {
+int VERBOSE = 0;
+}
 
 // TODO
 
@@ -85,12 +87,10 @@ int main(int argc, char **argv) {
 
   auto MemSize = readV<uint64_t>(Input);
   char *Memory = ccast(calloc(MemSize, 1));
-  if (VERBOSE)
-    printf("MemSize %lu : %p\n", MemSize, (void *)Memory);
+  INPUTGEN_DEBUG(printf("MemSize %lu : %p\n", MemSize, (void *)Memory));
 
   auto NumObjects = readV<uint32_t>(Input);
-  if (VERBOSE)
-    printf("NO %u\n", NumObjects);
+  INPUTGEN_DEBUG(printf("NO %u\n", NumObjects));
   VoidPtrTy CurMemory = (VoidPtrTy)Memory;
   struct ObjectTy {
     VoidPtrTy Start;
@@ -102,17 +102,15 @@ int main(int argc, char **argv) {
     assert(I == Idx);
     auto Size = readV<intptr_t>(Input);
     auto Offset = readV<intptr_t>(Input);
-    if (VERBOSE)
-      printf("O #%u -> size %ld offset %ld at %p\n", I, Size, Offset,
-             (void *)CurMemory);
+    INPUTGEN_DEBUG(printf("O #%u -> size %ld offset %ld at %p\n", I, Size,
+                          Offset, (void *)CurMemory));
     Objects.push_back({CurMemory, Offset});
     Input.read(ccast(CurMemory), Size);
     CurMemory += Size;
   }
 
   auto NumGlobals = readV<uint32_t>(Input);
-  if (VERBOSE)
-    printf("NG %u\n", NumGlobals);
+  INPUTGEN_DEBUG(printf("NG %u\n", NumGlobals));
   for (uint32_t I = 0; I < NumGlobals; I++) {
     auto ObjIdx = readV<uint32_t>(Input);
     assert(ObjIdx < NumObjects);
@@ -121,13 +119,12 @@ int main(int argc, char **argv) {
     // We cannot access globals with negative offsets
     assert(Obj.BaseOffset >= 0);
     Globals.push_back(ccast(GlobalMem));
-    if (VERBOSE)
-      printf("G #%u -> #%u, addr %p\n", I, ObjIdx, (void *)GlobalMem);
+    INPUTGEN_DEBUG(
+        printf("G #%u -> #%u, addr %p\n", I, ObjIdx, (void *)GlobalMem));
   }
 
   auto RelocatePointer = [&](VoidPtrTy *PtrLoc, const char *Type) {
-    if (VERBOSE)
-      printf("Reading pointer from %p\n", (void *)PtrLoc);
+    INPUTGEN_DEBUG(printf("Reading pointer from %p\n", (void *)PtrLoc));
     VoidPtrTy GlobalPtr = *PtrLoc;
     if (GlobalPtr == nullptr) {
       printf("Relocate %s %p -> %p\n", Type, (void *)GlobalPtr,
@@ -139,17 +136,15 @@ int main(int argc, char **argv) {
     intptr_t Offset = getOffsetFromObjBasePtr(LocalPtr);
     VoidPtrTy RealPtr = Obj.Start + Obj.BaseOffset + Offset;
     *PtrLoc = RealPtr;
-    if (VERBOSE)
-      printf("Relocate %s %p -> %p\n", Type, (void *)GlobalPtr,
-             (void *)RealPtr);
+    INPUTGEN_DEBUG(printf("Relocate %s %p -> %p\n", Type, (void *)GlobalPtr,
+                          (void *)RealPtr));
   };
 
   for (uint32_t I = 0; I < NumObjects; I++) {
     auto Idx = readV<uintptr_t>(Input);
     assert(Idx == I);
     auto NumPtrs = readV<uintptr_t>(Input);
-    if (VERBOSE)
-      printf("O #%u NP %lu\n", I, NumPtrs);
+    INPUTGEN_DEBUG(printf("O #%u NP %lu\n", I, NumPtrs));
     auto Obj = Objects[I];
     for (uintptr_t J = 0; J < NumPtrs; J++) {
       auto PtrOffset = readV<intptr_t>(Input);
@@ -161,8 +156,7 @@ int main(int argc, char **argv) {
 
   auto NumArgs = readV<uint32_t>(Input);
   char *ArgsMemory = ccast(calloc(NumArgs, sizeof(uintptr_t)));
-  if (VERBOSE)
-    printf("Args %u : %p\n", NumArgs, (void *)ArgsMemory);
+  INPUTGEN_DEBUG(printf("Args %u : %p\n", NumArgs, (void *)ArgsMemory));
   for (uint32_t I = 0; I < NumArgs; ++I) {
     auto Content = readV<uintptr_t>(Input);
     auto ObjIdx = readV<int32_t>(Input);
@@ -172,8 +166,7 @@ int main(int argc, char **argv) {
       printf("ObjIdx = -1 Arg not implemented\n");
       exit(2);
     }
-    if (VERBOSE)
-      printf("Arg #%d : %p\n", I, (void *)ArgsMemory);
+    INPUTGEN_DEBUG(printf("Arg #%d : %p\n", I, (void *)ArgsMemory));
     if (IsPtr)
       RelocatePointer(reinterpret_cast<VoidPtrTy *>(&Content), "Arg");
     memcpy(ArgsMemory + I * sizeof(void *), &Content, sizeof(void *));

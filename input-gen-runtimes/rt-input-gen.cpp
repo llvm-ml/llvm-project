@@ -19,7 +19,9 @@
 
 #include "rt.hpp"
 
-static int VERBOSE = 0;
+namespace {
+int VERBOSE = 0;
+}
 
 template <typename T> static T alignStart(T Ptr) {
   intptr_t IPtr = reinterpret_cast<intptr_t>(Ptr);
@@ -192,12 +194,12 @@ private:
     intptr_t NewAllocationSize =
         NewAllocatedMemoryEndOffset - NewAllocatedMemoryStartOffset;
 
-    if (VERBOSE)
-      printf("Reallocating data in Object %zu for access at %ld with size %d "
-             "from offset "
-             "%ld, size %ld to offset %ld, size %ld.\n",
-             Idx, Offset, Size, AllocationOffset, AllocationSize,
-             NewAllocationOffset, NewAllocationSize);
+    INPUTGEN_DEBUG(
+        printf("Reallocating data in Object %zu for access at %ld with size %d "
+               "from offset "
+               "%ld, size %ld to offset %ld, size %ld.\n",
+               Idx, Offset, Size, AllocationOffset, AllocationSize,
+               NewAllocationOffset, NewAllocationSize));
 
     extendMemory(Input, NewAllocationSize, NewAllocationOffset);
     extendMemory(Output, NewAllocationSize, NewAllocationOffset);
@@ -290,12 +292,10 @@ struct InputGenRTTy {
     if (rand(Stub) % 50) {
       size_t ObjIdx = getNewObj(1024 * 1024, true);
       VoidPtrTy Ptr = localPtrToGlobalPtr(ObjIdx, getObjBasePtr());
-      if (VERBOSE)
-        printf("New Obj #%lu at ptr %p\n", ObjIdx, (void *)Ptr);
+      INPUTGEN_DEBUG(printf("New Obj #%lu at ptr %p\n", ObjIdx, (void *)Ptr));
       return Ptr;
     }
-    if (VERBOSE)
-      printf("New Obj = nullptr\n");
+    INPUTGEN_DEBUG(printf("New Obj = nullptr\n"));
     return nullptr;
   }
 
@@ -313,9 +313,8 @@ struct InputGenRTTy {
                       int32_t GlobalSize) {
     size_t Idx = getNewObj(GlobalSize, false);
     Globals.push_back(Idx);
-    if (VERBOSE)
-      printf("Global %p replaced with Obj %zu @ %p\n", (void *)Global, Idx,
-             (void *)ReplGlobal);
+    INPUTGEN_DEBUG(printf("Global %p replaced with Obj %zu @ %p\n",
+                          (void *)Global, Idx, (void *)ReplGlobal));
     *ReplGlobal = localPtrToGlobalPtr(Idx, getObjBasePtr());
   }
 
@@ -379,9 +378,9 @@ struct InputGenRTTy {
     uintptr_t I = 0;
     for (auto &Obj : Objects) {
       auto MemoryChunk = Obj->getAlignedInputMemory();
-      if (VERBOSE)
-        printf("Obj #%zu aligned memory chunk at %p, size %lu\n", Obj->Idx,
-               (void *)MemoryChunk.Ptr, MemoryChunk.Size);
+      INPUTGEN_DEBUG(printf("Obj #%zu aligned memory chunk at %p, size %lu\n",
+                            Obj->Idx, (void *)MemoryChunk.Ptr,
+                            MemoryChunk.Size));
       writeV<intptr_t>(InputOut, Obj->Idx);
       writeV<intptr_t>(InputOut, MemoryChunk.Size);
       writeV<intptr_t>(InputOut, MemoryChunk.Offset);
@@ -394,8 +393,7 @@ struct InputGenRTTy {
       I++;
     }
 
-    if (VERBOSE)
-      printf("TotalSize %lu\n", TotalSize);
+    INPUTGEN_DEBUG(printf("TotalSize %lu\n", TotalSize));
     auto BeforeNumGlobals = InputOut.tellp();
     InputOut.seekp(BeforeTotalSize);
     writeV(InputOut, TotalSize);
@@ -412,15 +410,13 @@ struct InputGenRTTy {
     for (auto &Obj : Objects) {
       writeV<intptr_t>(InputOut, Obj->Idx);
       writeV<uintptr_t>(InputOut, Obj->Ptrs.size());
-      if (VERBOSE)
-        printf("O #%ld NP %ld\n", Obj->Idx, Obj->Ptrs.size());
+      INPUTGEN_DEBUG(printf("O #%ld NP %ld\n", Obj->Idx, Obj->Ptrs.size()));
       for (auto Ptr : Obj->Ptrs) {
         writeV<intptr_t>(InputOut, Ptr);
-        if (VERBOSE)
-          printf("P at %ld : %p\n", Ptr,
-                 *reinterpret_cast<void **>(MemoryChunks[Obj->Idx].Ptr +
-                                            MemoryChunks[Obj->Idx].Offset +
-                                            Ptr));
+        INPUTGEN_DEBUG(printf(
+            "P at %ld : %p\n", Ptr,
+            *reinterpret_cast<void **>(MemoryChunks[Obj->Idx].Ptr +
+                                       MemoryChunks[Obj->Idx].Offset + Ptr)));
       }
 
       assert(Obj->Idx == I);
@@ -605,8 +601,7 @@ ARG(long double, x86_fp80)
 
 VoidPtrTy __inputgen_translate_ptr(VoidPtrTy Ptr) {
   VoidPtrTy T = getInputGenRT().translatePtr(Ptr);
-  if (VERBOSE)
-    printf("Translate %p -> %p\n", (void *)Ptr, (void *)T);
+  INPUTGEN_DEBUG(printf("Translate %p -> %p\n", (void *)Ptr, (void *)T));
   return T;
 }
 
