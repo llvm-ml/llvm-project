@@ -16,10 +16,9 @@ namespace {
 int VERBOSE = 0;
 }
 
-// TODO
-
-static std::vector<void *> GetObjectPtrs;
-static unsigned GetObjectIdx = 0;
+static unsigned NumStubs;
+static VoidPtrTy StubsMemory = nullptr;
+static unsigned CurStub = 0;
 
 static std::vector<char *> Globals;
 static size_t GlobalsIt = 0;
@@ -29,14 +28,12 @@ static std::uniform_int_distribution<> Rand;
 int rand() { return Rand(Gen); }
 
 template <typename T> T getNewValue() {
-  T V = rand() % 10;
-  return V;
-}
-
-template <> void *getNewValue<void *>() {
-  if (!(rand() % 50))
-    return nullptr;
-  return GetObjectPtrs[GetObjectIdx++];
+  static_assert(sizeof(T) <= MaxPrimitiveTypeSize);
+  assert(CurStub < NumStubs);
+  T A;
+  memcpy(&A, StubsMemory + CurStub * MaxPrimitiveTypeSize, sizeof(A));
+  CurStub++;
+  return A;
 }
 
 extern "C" {
@@ -160,30 +157,23 @@ int main(int argc, char **argv) {
     }
   }
 
-  auto NumArgs = readV<uint32_t>(Input);
-  char *ArgsMemory = ccast(calloc(NumArgs, sizeof(uintptr_t)));
+  uint32_t NumGenVals = readV<uint32_t>(Input);
+  uint32_t NumArgs = readV<uint32_t>(Input);
+  VoidPtrTy ArgsMemory =
+      reinterpret_cast<VoidPtrTy>(calloc(NumGenVals, MaxPrimitiveTypeSize));
   INPUTGEN_DEBUG(printf("Args %u : %p\n", NumArgs, (void *)ArgsMemory));
-  for (uint32_t I = 0; I < NumArgs; ++I) {
-    auto Content = readV<uintptr_t>(Input);
-    auto ObjIdx = readV<int32_t>(Input);
+  for (uint32_t I = 0; I < NumGenVals; ++I) {
+    VoidPtrTy CurMem = ArgsMemory + I * MaxPrimitiveTypeSize;
+    Input.read(ccast(CurMem), MaxPrimitiveTypeSize);
     auto IsPtr = readV<int32_t>(Input);
-    if (ObjIdx != -1) {
-      assert(ObjIdx < (int64_t)Objects.size());
-      printf("ObjIdx = -1 Arg not implemented\n");
-      exit(2);
-    }
     INPUTGEN_DEBUG(printf("Arg #%d : %p\n", I, (void *)ArgsMemory));
     if (IsPtr)
-      RelocatePointer(reinterpret_cast<VoidPtrTy *>(&Content), "Arg");
-    memcpy(ArgsMemory + I * sizeof(void *), &Content, sizeof(void *));
+      RelocatePointer(reinterpret_cast<VoidPtrTy *>(CurMem), "GenVal");
   }
 
-  // auto NumGetObjects = readV<uint32_t>(Input);
-  // for (uint32_t I = 0; I < NumGetObjects; ++I) {
-  //   auto ObjIdx = readV<int32_t>(Input);
-  //   assert(ObjIdx);
-  //   GetObjectPtrs.push_back(ObjMap[ObjIdx]);
-  // }
+  StubsMemory = ArgsMemory + NumArgs * MaxPrimitiveTypeSize;
+  NumStubs = NumGenVals - NumArgs;
+  INPUTGEN_DEBUG(printf("Stubs %u : %p\n", NumStubs, (void *)StubsMemory));
 
   void *Handle = dlopen(NULL, RTLD_NOW);
   if (!Handle) {
@@ -201,7 +191,7 @@ int main(int argc, char **argv) {
   }
 
   printf("Run\n");
-  EntryFn(ArgsMemory);
+  EntryFn(ccast(ArgsMemory));
 
   dlclose(Handle);
 

@@ -20,6 +20,7 @@ extern int VERBOSE;
 #endif
 
 static constexpr intptr_t ObjAlignment = 16;
+static constexpr intptr_t MaxPrimitiveTypeSize = 16;
 
 typedef uint8_t *VoidPtrTy;
 

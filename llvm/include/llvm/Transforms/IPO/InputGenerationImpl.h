@@ -92,6 +92,8 @@ public:
     X86_FP80Ty = Type::getX86_FP80Ty(*Ctx);
   }
 
+  typedef DenseMap<Type *, FunctionCallee> CallbackCollectionTy;
+
   /// If it is an interesting memory access, populate information
   /// about the access and return a InterestingMemoryAccess struct.
   /// Otherwise return std::nullopt.
@@ -113,6 +115,8 @@ public:
 
   void instrumentFunction(Function &F);
   void instrumentModuleForEntryPoint(Function &F);
+  Value *constructTypeUsingCallbacks(Module &M, IRBuilderBase &IRB,
+                                     CallbackCollectionTy &CC, Type *T);
   void createRecordingEntryPoint(Function &F);
   void createGenerationEntryPoint(Function &F, bool UniqName);
   void createRunEntryPoint(Function &F, bool UniqName);
@@ -135,8 +139,9 @@ public:
   void initializeCallbacks(Module &M);
 
 private:
-  DenseMap<Type *, FunctionCallee> InputGenMemoryAccessCallback;
-  DenseMap<Type *, FunctionCallee> ValueGenCallback;
+  CallbackCollectionTy InputGenMemoryAccessCallback;
+  CallbackCollectionTy ValueGenCallback;
+  CallbackCollectionTy ArgGenCallback;
   FunctionCallee InputGenTranslatePtr;
 
   FunctionCallee InputGenMemmove, InputGenMemcpy, InputGenMemset;

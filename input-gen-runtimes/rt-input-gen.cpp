@@ -151,24 +151,16 @@ private:
   }
 };
 
-struct ArgTy {
-  uintptr_t Content;
-  int32_t ObjIdx;
+struct GenValTy {
+  uint8_t Content[MaxPrimitiveTypeSize];
+  static_assert(sizeof(Content) == MaxPrimitiveTypeSize);
   int32_t IsPtr;
 };
 
-template <typename T> static T fromArgTy(ArgTy U) {
-  static_assert(sizeof(T) <= sizeof(U));
-  T A;
-  memcpy(&A, &U.Content, sizeof(A));
-  return A;
-}
-
-template <typename T> static ArgTy toArgTy(T A, int32_t ObjIdx, int32_t IsPtr) {
-  ArgTy U;
-  static_assert(sizeof(T) <= sizeof(U));
-  memcpy(&U.Content, &A, sizeof(A));
-  U.ObjIdx = ObjIdx;
+template <typename T> static GenValTy toGenValTy(T A, int32_t IsPtr) {
+  GenValTy U;
+  static_assert(sizeof(T) <= sizeof(U.Content));
+  memcpy(U.Content, &A, sizeof(A));
   U.IsPtr = IsPtr;
   return U;
 }
@@ -181,8 +173,7 @@ struct InputGenRTTy {
       : Seed(Seed), FuncIdent(FuncIdent), OutputDir(OutputDir),
         ExecPath(ExecPath) {
     Gen.seed(Seed);
-    SeedStub = rand(false);
-    GenStub.seed(SeedStub);
+    GenStub.seed(Seed + 1);
     if (this->FuncIdent != "") {
       this->FuncIdent += ".";
     }
@@ -260,24 +251,35 @@ struct InputGenRTTy {
     return Idx;
   }
 
-  template <typename T>
-  T getNewValue(int32_t *ObjIdx = nullptr, bool Stub = false, int Max = 10) {
-    static_assert(!std::is_pointer<T>::value);
-    NumNewValues++;
-    T V = rand(Stub) % Max;
-    return V;
-  }
-
   ObjectTy *globalPtrToObj(VoidPtrTy GlobalPtr) {
     size_t Idx = OA.globalPtrToObjIdx(GlobalPtr) - OutputObjIdxOffset;
     assert(Idx >= 0 && Idx < Objects.size());
     return Objects[Idx].get();
   }
 
-  template <>
-  VoidPtrTy getNewValue<VoidPtrTy>(int32_t *ObjIdx, bool Stub, int Max) {
+  template <typename T> T getNewArg() {
+    T V = getNewValue<T>();
+    GenVals.push_back(toGenValTy(V, std::is_pointer<T>::value));
+    NumArgs++;
+    return V;
+  }
+
+  template <typename T> T getNewStub() {
+    T V = getNewValue<T>(/*Stub=*/true);
+    GenVals.push_back(toGenValTy(V, std::is_pointer<T>::value));
+    return V;
+  }
+
+  template <typename T> T getNewValue(bool Stub = false, int Max = 10) {
+    static_assert(!std::is_pointer<T>::value);
     NumNewValues++;
-    if (rand(Stub) % 50) {
+    T V = rand(Stub) % Max;
+    return V;
+  }
+
+  template <> VoidPtrTy getNewValue<VoidPtrTy>(bool Stub, int Max) {
+    NumNewValues++;
+    if (rand(Stub) % 75) {
       size_t ObjIdx = getNewObj(/*ignored currently*/ 1024 * 1024, true);
       VoidPtrTy OutputPtr = OA.localPtrToGlobalPtr(ObjIdx + OutputObjIdxOffset,
                                                    OA.getObjBasePtr());
@@ -307,7 +309,8 @@ struct InputGenRTTy {
     Globals.push_back(Idx);
     INPUTGEN_DEBUG(printf("Global %p replaced with Obj %zu @ %p\n",
                           (void *)Global, Idx, (void *)ReplGlobal));
-    *ReplGlobal = OA.localPtrToGlobalPtr(Idx + OutputObjIdxOffset, OA.getObjBasePtr());
+    *ReplGlobal =
+        OA.localPtrToGlobalPtr(Idx + OutputObjIdxOffset, OA.getObjBasePtr());
   }
 
   VoidPtrTy translatePtr(VoidPtrTy GlobalPtr) { return GlobalPtr; }
@@ -316,7 +319,8 @@ struct InputGenRTTy {
 
   uint64_t NumNewValues = 0;
 
-  std::vector<ArgTy> Args;
+  std::vector<GenValTy> GenVals;
+  uint32_t NumArgs = 0;
 
   // Storage for dynamic objects, TODO maybe we should introduce a static size
   // object type for when we know the size from static analysis.
@@ -326,7 +330,7 @@ struct InputGenRTTy {
     if (OutputDir == "-") {
       // TODO cross platform
       std::ofstream Null("/dev/null");
-      report(stdout, Null);
+      report(Null);
     } else {
       auto FileName = ExecPath.filename().string();
       std::string ReportOutName(OutputDir + "/" + FileName + ".report." +
@@ -335,24 +339,18 @@ struct InputGenRTTy {
                                FuncIdent + std::to_string(Seed) + ".bin");
       std::ofstream InputOutStream(InputOutName,
                                    std::ios::out | std::ios::binary);
-      FILE *ReportOutFD = fopen(ReportOutName.c_str(), "w");
-      if (!ReportOutFD) {
-        fprintf(stderr, "Could not open %s\n", ReportOutName.c_str());
-        return;
-      }
-      report(ReportOutFD, InputOutStream);
-      fclose(ReportOutFD);
+      report(InputOutStream);
     }
   }
 
-  void report(FILE *ReportOut, std::ofstream &InputOut) {
-    fprintf(ReportOut, "Args (%zu total)\n", Args.size());
-    for (size_t I = 0; I < Args.size(); ++I)
-      fprintf(ReportOut, "Arg %zu: %p\n", I, (void *)Args[I].Content);
-    fprintf(ReportOut, "Num new values: %lu\n", NumNewValues);
+  void report(std::ofstream &InputOut) {
+    printf("Args (%u total)\n", NumArgs);
+    for (size_t I = 0; I < NumArgs; ++I)
+      printf("Arg %zu: %p\n", I, (void *)GenVals[I].Content);
+    printf("Num new values: %lu\n", NumNewValues);
     // fprintf(ReportOut, "Heap PtrMap: %lu\n", Heap->PtrMap.size());
     // fprintf(ReportOut, "Heap ValMap: %lu\n", Heap->ValMap.size());
-    fprintf(ReportOut, "Objects (%zu total)\n", Objects.size());
+    printf("Objects (%zu total)\n", Objects.size());
 
     writeV<uintptr_t>(InputOut, OA.Size);
     writeV<uintptr_t>(InputOut, OutputObjIdxOffset);
@@ -418,19 +416,14 @@ struct InputGenRTTy {
       I++;
     }
 
-    uint32_t NumArgs = Args.size();
+    uint32_t NumGenVals = GenVals.size();
+    writeV<uint32_t>(InputOut, NumGenVals);
     writeV<uint32_t>(InputOut, NumArgs);
-    for (auto &Arg : Args) {
-      writeV<uintptr_t>(InputOut, Arg.Content);
-      writeV<int32_t>(InputOut, Arg.ObjIdx);
-      writeV<int32_t>(InputOut, Arg.IsPtr);
+    for (auto &GenVal : GenVals) {
+      static_assert(sizeof(GenVal.Content) == MaxPrimitiveTypeSize);
+      InputOut.write(ccast(GenVal.Content), MaxPrimitiveTypeSize);
+      writeV<int32_t>(InputOut, GenVal.IsPtr);
     }
-
-    // uint32_t NumGetObjects = GetObjects.size();
-    // writeV(InputOut, NumGetObjects);
-    // for (auto ObjIdx : GetObjects) {
-    //   writeV(InputOut, ObjIdx);
-    // }
   }
 };
 
@@ -495,13 +488,7 @@ VoidPtrTy __inputgen_memset(VoidPtrTy Tgt, char C, uint64_t N) {
 }
 
 #define RW(TY, NAME)                                                           \
-  TY __inputgen_get_##NAME() {                                                 \
-    int32_t ObjIdx = -1;                                                       \
-    TY V = getInputGenRT().getNewValue<TY>(&ObjIdx, true);                     \
-    if constexpr (std::is_pointer<TY>::value)                                  \
-      GetObjects.push_back(ObjIdx);                                            \
-    return V;                                                                  \
-  }                                                                            \
+  TY __inputgen_get_##NAME() { return getInputGenRT().getNewStub<TY>(); }      \
   void __inputgen_access_##NAME(VoidPtrTy Ptr, int64_t Val, int32_t Size,      \
                                 VoidPtrTy Base, int32_t Kind) {                \
     switch (Kind) {                                                            \
@@ -525,22 +512,10 @@ VoidPtrTy __inputgen_memset(VoidPtrTy Tgt, char C, uint64_t N) {
     default:                                                                   \
       abort();                                                                 \
     }                                                                          \
-  }                                                                            \
-  void __record_read_##NAME(VoidPtrTy Ptr, int64_t Val, int32_t Size,          \
-                            VoidPtrTy Base, int32_t Kind) {                    \
-    switch (Kind) {                                                            \
-    case 0:                                                                    \
-      getInputGenRT().read<TY>(Ptr, Base, Size);                               \
-      return;                                                                  \
-    case 1:                                                                    \
-      getInputGenRT().write<TY>(Ptr, (TY)Val, Size);                           \
-      return;                                                                  \
-    default:                                                                   \
-      abort();                                                                 \
-    }                                                                          \
   }
 
 #define RWREF(TY, NAME)                                                        \
+  TY __inputgen_get_##NAME() { return getInputGenRT().getNewStub<TY>(); }      \
   void __inputgen_access_##NAME(VoidPtrTy Ptr, int64_t Val, int32_t Size,      \
                                 VoidPtrTy Base, int32_t Kind) {                \
     static_assert(sizeof(TY) > 8);                                             \
@@ -571,13 +546,7 @@ RWREF(long double, x86_fp80)
 #undef RW
 
 #define ARG(TY, NAME)                                                          \
-  TY __inputgen_arg_##NAME() {                                                 \
-    int32_t ObjIdx = -1;                                                       \
-    getInputGenRT().Args.push_back(                                            \
-        toArgTy<TY>(getInputGenRT().getNewValue<TY>(&ObjIdx), ObjIdx,          \
-                    std::is_pointer<TY>::value));                              \
-    return fromArgTy<TY>(getInputGenRT().Args.back());                         \
-  }
+  TY __inputgen_arg_##NAME() { return getInputGenRT().getNewArg<TY>(); }
 
 ARG(bool, i1)
 ARG(char, i8)

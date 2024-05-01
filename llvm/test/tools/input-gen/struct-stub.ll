@@ -8,26 +8,14 @@ target triple = "x86_64-unknown-linux-gnu"
 
 %struct.A = type { ptr, i32, float }
 ; Function Attrs: alwaysinline nounwind uwtable
-define hidden void @_mm_add_epi32(ptr noundef %__a.addr, ptr noundef %__b.addr, ptr noundef %__c.addr) #0 {
-entry:
-  %__a = load %struct.A, ptr %__a.addr
-  %__b = load %struct.A, ptr %__b.addr
-  %a = extractvalue %struct.A %__a, 1
-  %b = extractvalue %struct.A %__b, 1
-  %add = add i32 %a, %b
-  %c = insertvalue %struct.A %__b, i32 %add, 1
-  store %struct.A %c, ptr %__c.addr
-  ret void
-}
+declare hidden %struct.B @struct()
 
 %struct.B = type { ptr, {i32, {float}, i8} }
 ; Function Attrs: alwaysinline nounwind uwtable
-define hidden void @_mm_add_epi32_2(ptr noundef %__a.addr, ptr noundef %__b.addr, ptr noundef %__c.addr) #0 {
+define hidden %struct.B @nested_struct() #0 {
 entry:
-  %__a = load %struct.B, ptr %__a.addr
-  %__b = load %struct.B, ptr %__b.addr
-  store %struct.B %__a, ptr %__c.addr
-  ret void
+  %a = call %struct.B @struct()
+  ret %struct.B %a
 }
 
 attributes #0 = { alwaysinline nounwind uwtable "min-legal-vector-width"="128" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "target-cpu"="x86-64" "target-features"="+avx,+cmov,+crc32,+cx8,+fxsr,+mmx,+popcnt,+sse,+sse2,+sse3,+sse4.1,+sse4.2,+ssse3,+x87,+xsave" "tune-cpu"="generic" }

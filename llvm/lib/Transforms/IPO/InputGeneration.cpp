@@ -580,6 +580,8 @@ void InputGenInstrumenter::initializeCallbacks(Module &M) {
                               PtrTy, Int64Ty, Int32Ty, PtrTy, Int32Ty);
     ValueGenCallback[Ty] =
         M.getOrInsertFunction(Prefix + "get_" + ::getTypeName(Ty), Ty);
+    ArgGenCallback[Ty] =
+        M.getOrInsertFunction(Prefix + "get_" + ::getTypeName(Ty), Ty);
   }
 
   InputGenMemmove =
@@ -621,10 +623,8 @@ void InputGenInstrumenter::stubDeclarations(Module &M, TargetLibraryInfo &TLI) {
     auto *RTy = F.getReturnType();
     if (RTy->isVoidTy())
       IRB.CreateRetVoid();
-    else if (ValueGenCallback.count(RTy))
-      IRB.CreateRet(IRB.CreateCall(ValueGenCallback[RTy]));
     else
-      IRB.CreateRet(Constant::getNullValue(RTy));
+      IRB.CreateRet(constructTypeUsingCallbacks(M, IRB, ValueGenCallback, RTy));
   }
 }
 
@@ -769,6 +769,34 @@ void InputGenInstrumenter::createGlobalCalls(Module &M, IRBuilder<> &IRB) {
   }
 }
 
+Value *InputGenInstrumenter::constructTypeUsingCallbacks(
+    Module &M, IRBuilderBase &IRB, CallbackCollectionTy &CC, Type *T) {
+  if (auto *ST = dyn_cast<StructType>(T)) {
+    Value *V = UndefValue::get(ST);
+    for (unsigned It = 0; It < ST->getNumElements(); It++) {
+      Type *ElTy = ST->getElementType(It);
+      V = IRB.CreateInsertValue(
+          V, constructTypeUsingCallbacks(M, IRB, CC, ElTy), {It});
+    }
+    return V;
+  } else if (auto *VT = dyn_cast<VectorType>(T)) {
+    Type *ElTy = VT->getElementType();
+    if (!VT->getElementCount().isScalable()) {
+      auto Count = VT->getElementCount().getFixedValue();
+      Value *V = UndefValue::get(VT);
+      for (unsigned It = 0; It < Count; It++) {
+        V = IRB.CreateInsertElement(
+            V, constructTypeUsingCallbacks(M, IRB, CC, ElTy), IRB.getInt64(It));
+      }
+      return V;
+    } else {
+      llvm_unreachable("Scalable vectors unsupported.");
+    }
+  } else {
+    return IRB.CreateCall(CC[T], {});
+  }
+}
+
 void InputGenInstrumenter::createGenerationEntryPoint(Function &F,
                                                       bool UniqName) {
   Module &M = *F.getParent();
@@ -797,36 +825,9 @@ void InputGenInstrumenter::createGenerationEntryPoint(Function &F,
     EntryPoint->addFnAttr(F.getFnAttribute("min-legal-vector-width"));
 
   SmallVector<Value *> Args;
-  std::function<Value *(Type * T)> HandleType;
-  HandleType = [&](Type *T) -> Value * {
-    if (auto *ST = dyn_cast<StructType>(T)) {
-      Value *V = UndefValue::get(ST);
-      for (unsigned It = 0; It < ST->getNumElements(); It++) {
-        Type *ElTy = ST->getElementType(It);
-        V = IRB.CreateInsertValue(V, HandleType(ElTy), {It});
-      }
-      return V;
-    } else if (auto *VT = dyn_cast<VectorType>(T)) {
-      Type *ElTy = VT->getElementType();
-      if (!VT->getElementCount().isScalable()) {
-        auto Count = VT->getElementCount().getFixedValue();
-        Value *V = UndefValue::get(VT);
-        for (unsigned It = 0; It < Count; It++) {
-          V = IRB.CreateInsertElement(V, HandleType(ElTy), IRB.getInt64(It));
-        }
-        return V;
-      } else {
-        llvm_unreachable("Scalable vectors unsupported.");
-      }
-    } else {
-      FunctionCallee ArgFn = M.getOrInsertFunction(
-          InputGenCallbackPrefix + "arg_" + ::getTypeName(T),
-          FunctionType::get(T, false));
-      return IRB.CreateCall(ArgFn, {});
-    }
-  };
   for (auto &Arg : F.args())
-    Args.push_back(HandleType(Arg.getType()));
+    Args.push_back(
+        constructTypeUsingCallbacks(M, IRB, ArgGenCallback, Arg.getType()));
   IRB.CreateCall(FunctionCallee(F.getFunctionType(), &F), Args, "");
 }
 
@@ -858,7 +859,9 @@ void InputGenInstrumenter::createRunEntryPoint(Function &F, bool UniqName) {
   Argument *ArgsPtr = EntryPoint->getArg(0);
   unsigned Idx = 0;
   auto GetNext = [&]() {
-    return IRB.CreateGEP(PtrTy, ArgsPtr, {IRB.getInt64(Idx++)});
+    Value *GEP = IRB.CreateGEP(PtrTy, ArgsPtr, {IRB.getInt64(Idx)});
+    Idx += 2;
+    return GEP;
   };
   SmallVector<Value *> Args;
   std::function<Value *(Type * T)> HandleType;
