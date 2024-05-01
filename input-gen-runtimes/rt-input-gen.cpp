@@ -234,12 +234,6 @@ template <typename T> static ArgTy toArgTy(T A, int32_t ObjIdx, int32_t IsPtr) {
 
 std::vector<int32_t> GetObjects;
 
-static unsigned int highest_one(uint64_t x) { return 63 ^ __builtin_clzll(x); }
-
-static uint64_t round_down_to_power_of_2(uint64_t x) {
-  return 1ULL << highest_one(x | 1);
-}
-
 struct InputGenRTTy {
   InputGenRTTy(const char *ExecPath, const char *OutputDir,
                const char *FuncIdent, int Seed)
@@ -251,9 +245,6 @@ struct InputGenRTTy {
     if (this->FuncIdent != "") {
       this->FuncIdent += ".";
     }
-    // NULL object. This guarantees all the remaining objs will have the top
-    // bits > 0.
-    getNewObj(0, true);
 
     const struct rlimit Rlimit = {RLIM_INFINITY, RLIM_INFINITY};
     int Err = setrlimit(RLIMIT_AS, &Rlimit);
@@ -263,25 +254,16 @@ struct InputGenRTTy {
     uintptr_t Size = (uintptr_t)1024 /*G*/ * 1024 /*M*/ * 1024 /*K*/ * 1024;
     static_assert(sizeof(Size) >= 8);
     // 3/4 of the address space goes to in-object addressing
-    uintptr_t MaxObjectSize;
-    uintptr_t MaxObjectNum;
     do {
       Size = Size / 2;
-      uintptr_t HO = highest_one(Size | 1);
-      uintptr_t BitsForObj = HO * 3 / 4;
-      MaxObjectSize = 1ULL << BitsForObj;
-      MaxObjectNum = 1ULL << (HO - BitsForObj);
-    } while (!OutputMem.allocate(Size, MaxObjectSize));
+      OA.setSize(Size);
+    } while (!OutputMem.allocate(Size, OA.MaxObjectSize));
     INPUTGEN_DEBUG(printf("Max obj size: 0x%lx, max obj num: %lu\n",
-                          MaxObjectSize, MaxObjectNum));
+                          OA.MaxObjectSize, OA.MaxObjectNum));
 
-    assert(OutputMem.allocate(Size, MaxObjectSize));
-    assert(InputMem.allocate(Size, MaxObjectSize));
-    assert(UsedMem.allocate(Size, MaxObjectSize));
-
-    intptr_t ObjAlignment = 16;
-
-    abort();
+    assert(OutputMem.allocate(Size, OA.MaxObjectSize));
+    assert(InputMem.allocate(Size, OA.MaxObjectSize));
+    assert(UsedMem.allocate(Size, OA.MaxObjectSize));
   }
   ~InputGenRTTy() { report(); }
 
@@ -319,6 +301,7 @@ struct InputGenRTTy {
     ~AlignedAllocation() { free(Memory); }
   };
   AlignedAllocation OutputMem, InputMem, UsedMem;
+  ObjectAddressing OA;
 
   int rand(bool Stub) { return Stub ? Rand(GenStub) : Rand(Gen); }
 
@@ -336,13 +319,8 @@ struct InputGenRTTy {
     return V;
   }
 
-  VoidPtrTy localPtrToGlobalPtr(size_t ObjIdx, VoidPtrTy PtrInObj) {
-    return reinterpret_cast<VoidPtrTy>((ObjIdx * MaxObjectSize) |
-                                       reinterpret_cast<intptr_t>(PtrInObj));
-  }
-
   ObjectTy *globalPtrToObj(VoidPtrTy GlobalPtr) {
-    size_t Idx = globalPtrToObjIdx(GlobalPtr);
+    size_t Idx = OA.globalPtrToObjIdx(GlobalPtr);
     // Idx > 0 because Idx = 0 is the NULL pointer (object).
     assert(Idx > 0 && Idx < Objects.size());
     return Objects[Idx].get();
@@ -352,8 +330,8 @@ struct InputGenRTTy {
   VoidPtrTy getNewValue<VoidPtrTy>(int32_t *ObjIdx, bool Stub, int Max) {
     NumNewValues++;
     if (rand(Stub) % 50) {
-      size_t ObjIdx = getNewObj(1024 * 1024, true);
-      VoidPtrTy Ptr = localPtrToGlobalPtr(ObjIdx, getObjBasePtr());
+      size_t ObjIdx = getNewObj(/*ignored currently*/ 1024 * 1024, true);
+      VoidPtrTy Ptr = OA.localPtrToGlobalPtr(ObjIdx, OA.getObjBasePtr());
       INPUTGEN_DEBUG(printf("New Obj #%lu at ptr %p\n", ObjIdx, (void *)Ptr));
       return Ptr;
     }
@@ -363,12 +341,12 @@ struct InputGenRTTy {
 
   template <typename T> void write(VoidPtrTy Ptr, T Val, uint32_t Size) {
     ObjectTy *Obj = globalPtrToObj(Ptr);
-    Obj->write<T>(Val, globalPtrToLocalPtr(Ptr), Size);
+    Obj->write<T>(Val, OA.globalPtrToLocalPtr(Ptr), Size);
   }
 
   template <typename T> T read(VoidPtrTy Ptr, VoidPtrTy Base, uint32_t Size) {
     ObjectTy *Obj = globalPtrToObj(Ptr);
-    return Obj->read<T>(globalPtrToLocalPtr(Ptr), Size);
+    return Obj->read<T>(OA.globalPtrToLocalPtr(Ptr), Size);
   }
 
   void registerGlobal(VoidPtrTy Global, VoidPtrTy *ReplGlobal,
@@ -377,12 +355,12 @@ struct InputGenRTTy {
     Globals.push_back(Idx);
     INPUTGEN_DEBUG(printf("Global %p replaced with Obj %zu @ %p\n",
                           (void *)Global, Idx, (void *)ReplGlobal));
-    *ReplGlobal = localPtrToGlobalPtr(Idx, getObjBasePtr());
+    *ReplGlobal = OA.localPtrToGlobalPtr(Idx, OA.getObjBasePtr());
   }
 
   VoidPtrTy translatePtr(VoidPtrTy GlobalPtr) {
     return globalPtrToObj(GlobalPtr)->getRealPtr(
-        globalPtrToLocalPtr(GlobalPtr));
+        OA.globalPtrToLocalPtr(GlobalPtr));
   }
 
   std::vector<size_t> Globals;
