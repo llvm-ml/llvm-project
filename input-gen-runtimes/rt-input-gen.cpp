@@ -14,6 +14,7 @@
 #include <map>
 #include <random>
 #include <set>
+#include <sys/resource.h>
 #include <type_traits>
 #include <vector>
 
@@ -233,6 +234,12 @@ template <typename T> static ArgTy toArgTy(T A, int32_t ObjIdx, int32_t IsPtr) {
 
 std::vector<int32_t> GetObjects;
 
+static unsigned int highest_one(uint64_t x) { return 63 ^ __builtin_clzll(x); }
+
+static uint64_t round_down_to_power_of_2(uint64_t x) {
+  return 1ULL << highest_one(x | 1);
+}
+
 struct InputGenRTTy {
   InputGenRTTy(const char *ExecPath, const char *OutputDir,
                const char *FuncIdent, int Seed)
@@ -247,6 +254,34 @@ struct InputGenRTTy {
     // NULL object. This guarantees all the remaining objs will have the top
     // bits > 0.
     getNewObj(0, true);
+
+    const struct rlimit Rlimit = {RLIM_INFINITY, RLIM_INFINITY};
+    int Err = setrlimit(RLIMIT_AS, &Rlimit);
+    if (Err && VERBOSE)
+      printf("Could not set bigger limit on malloc: %s\n", strerror(errno));
+
+    uintptr_t Size = (uintptr_t)1024 /*G*/ * 1024 /*M*/ * 1024 /*K*/ * 1024;
+    static_assert(sizeof(Size) >= 8);
+    // 3/4 of the address space goes to in-object addressing
+    uintptr_t MaxObjectSize;
+    uintptr_t MaxObjectNum;
+    do {
+      Size = Size / 2;
+      uintptr_t HO = highest_one(Size | 1);
+      uintptr_t BitsForObj = HO * 3 / 4;
+      MaxObjectSize = 1ULL << BitsForObj;
+      MaxObjectNum = 1ULL << (HO - BitsForObj);
+    } while (!OutputMem.allocate(Size, MaxObjectSize));
+    INPUTGEN_DEBUG(printf("Max obj size: 0x%lx, max obj num: %lu\n",
+                          MaxObjectSize, MaxObjectNum));
+
+    assert(OutputMem.allocate(Size, MaxObjectSize));
+    assert(InputMem.allocate(Size, MaxObjectSize));
+    assert(UsedMem.allocate(Size, MaxObjectSize));
+
+    intptr_t ObjAlignment = 16;
+
+    abort();
   }
   ~InputGenRTTy() { report(); }
 
@@ -256,6 +291,34 @@ struct InputGenRTTy {
   std::filesystem::path ExecPath;
   std::mt19937 Gen, GenStub;
   std::uniform_int_distribution<> Rand;
+  struct AlignedAllocation {
+    VoidPtrTy Memory = nullptr;
+    uintptr_t Size = 0;
+    uintptr_t Alignment = 0;
+    VoidPtrTy AlignedMemory = nullptr;
+    uintptr_t AlignedSize = 0;
+    bool allocate(uintptr_t S, uintptr_t A) {
+      if (Memory)
+        free(Memory);
+      Size = S + A;
+      Memory = (VoidPtrTy)malloc(Size);
+      if (Memory) {
+        Alignment = A;
+        AlignedSize = S;
+        AlignedMemory = alignStart(Memory, A);
+        INPUTGEN_DEBUG(printf("Allocated 0x%lx (0x%lx) bytes of 0x%lx-aligned "
+                              "memory at start %p.\n",
+                              AlignedSize, Size, Alignment,
+                              (void *)AlignedMemory));
+      } else {
+        INPUTGEN_DEBUG(
+            printf("Unable to allocate memory with size 0x%lx\n", Size));
+      }
+      return Memory;
+    }
+    ~AlignedAllocation() { free(Memory); }
+  };
+  AlignedAllocation OutputMem, InputMem, UsedMem;
 
   int rand(bool Stub) { return Stub ? Rand(GenStub) : Rand(Gen); }
 
