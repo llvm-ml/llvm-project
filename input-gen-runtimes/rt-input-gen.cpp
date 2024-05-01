@@ -611,7 +611,7 @@ VoidPtrTy __inputgen_translate_ptr(VoidPtrTy Ptr) {
 }
 
 // TODO Need to rename this when instrumenting
-// void free(VoidPtrTy) {}
+// void free(void *) {}
 }
 
 int main(int argc, char **argv) {
