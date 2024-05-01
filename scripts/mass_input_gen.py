@@ -74,6 +74,12 @@ def handle_single_module(task):
 
         return igm.get_statistics()
 
+def pretty_print_statistics(stats):
+    print('Module statistics:')
+
+    for k, v in stats:
+        print(k, v)
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('MassInputGen')
 
@@ -122,7 +128,7 @@ if __name__ == '__main__':
         agg_stats = functools.reduce(
             input_gen_module.InputGenModule().add_statistics, stats, empty)
 
-        print('Module statistics: {}'.format(list(zip(range(args.start, args.end), stats))))
+        pretty_print_statistics(list(zip(range(args.start, args.end), stats)))
 
         print('Statistics: {}'.format(agg_stats))
 
@@ -145,6 +151,6 @@ if __name__ == '__main__':
             agg_stats = functools.reduce(
                 input_gen_module.InputGenModule().add_statistics, stats, empty)
 
-            print('Module statistics: {}'.format(list(zip(range(args.start, args.end), stats))))
+            pretty_print_statistics(list(zip(range(args.start, args.end), stats)))
 
             print('Statistics: {}'.format(agg_stats))
