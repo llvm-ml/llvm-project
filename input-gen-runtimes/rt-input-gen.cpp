@@ -23,15 +23,14 @@ namespace {
 int VERBOSE = 0;
 }
 
-template <typename T> static T alignStart(T Ptr) {
+template <typename T> static T alignStart(T Ptr, intptr_t Alignment) {
   intptr_t IPtr = reinterpret_cast<intptr_t>(Ptr);
-  return reinterpret_cast<T>(IPtr / ObjAlignment * ObjAlignment);
+  return reinterpret_cast<T>(IPtr / Alignment * Alignment);
 }
 
-template <typename T> static T alignEnd(T Ptr) {
+template <typename T> static T alignEnd(T Ptr, intptr_t Alignment) {
   intptr_t IPtr = reinterpret_cast<intptr_t>(Ptr);
-  return reinterpret_cast<intptr_t>((((IPtr - 1) / ObjAlignment) + 1) *
-                                    ObjAlignment);
+  return reinterpret_cast<intptr_t>((((IPtr - 1) / Alignment) + 1) * Alignment);
 }
 
 static VoidPtrTy advance(VoidPtrTy Ptr, uint64_t Bytes) {
@@ -181,13 +180,13 @@ private:
 
     if (AccessStartOffset < AllocatedMemoryStartOffset) {
       // Extend the allocation in the negative direction
-      NewAllocatedMemoryStartOffset =
-          alignStart(std::min(2 * AccessStartOffset, -MinObjAllocation));
+      NewAllocatedMemoryStartOffset = alignStart(
+          std::min(2 * AccessStartOffset, -MinObjAllocation), ObjAlignment);
     }
     if (AccessEndOffset >= AllocatedMemoryEndOffset) {
       // Extend the allocation in the positive direction
-      NewAllocatedMemoryEndOffset =
-          alignEnd(std::max(2 * AccessEndOffset, MinObjAllocation));
+      NewAllocatedMemoryEndOffset = alignEnd(
+          std::max(2 * AccessEndOffset, MinObjAllocation), ObjAlignment);
     }
 
     intptr_t NewAllocationOffset = NewAllocatedMemoryStartOffset;
