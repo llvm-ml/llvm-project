@@ -20,7 +20,7 @@ class ModuleHandler:
         self.igm_args = igm_args
         self.verbose = verbose
     def handle_single_module(self, i):
-        if i % 500 == 0:
+        if i % 100 == 0:
             print("Module #{}".format(i))
         ds_i = self.ds.skip(i)
         module = list(ds_i.take(1))[0]
@@ -51,7 +51,7 @@ def precompile_runtime(fname):
 
         obj = fname + '.o'
         subprocess.run(
-            'clang++ -std=c++17 -c -O3 -g'.split(' ') +
+            'clang++ -std=c++17 -c -O1 -g'.split(' ') +
             [fname, '-o', obj],
             check=True)
         return obj

@@ -50,5 +50,6 @@ done
     --input-gen-runtime "$(readlink -f "$SCRIPT_DIR/../input-gen-runtimes/rt-input-gen.cpp")" \
     --input-run-runtime "$(readlink -f "$SCRIPT_DIR/../input-gen-runtimes/rt-run.cpp")" \
     --input-gen-num 1 \
+    --input-gen-num-retries 5 \
     --input-gen-timeout 5 \
     --input-run-timeout 5 \

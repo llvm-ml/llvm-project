@@ -9,6 +9,7 @@ import json
 
 def add_option_args(parser):
     parser.add_argument('--input-gen-num', type=int, default=1)
+    parser.add_argument('--input-gen-num-retries', type=int, default=5)
     parser.add_argument('--input-gen-timeout', type=int, default=5)
     parser.add_argument('--input-run-timeout', type=int, default=5)
     # TODO Pass in an object files here so as not to compile the cpp every time
@@ -24,6 +25,8 @@ class Function:
         self.input_gen_executable = None
         self.input_run_executable = None
         self.inputs_dir = None
+        self.tried_seeds = []
+        self.succeeded_seeds = []
         self.inputs = []
         self.times = {}
         self.verbose = verbose
@@ -161,52 +164,60 @@ class InputGenModule:
 
                 self.print('Generating inputs for function @{}'.format(fname))
 
-                try:
-                    start = 0
-                    end = self.input_gen_num
-                    proc = subprocess.Popen(
-                        [
-                            input_gen_executable,
-                            inputs_dir,
-                            str(start), str(end),
-                            fname,
-                        ],
-                        stdout=self.get_stdout(),
-                        stderr=self.get_stderr())
+                seed = 0
+                for _ in range(self.input_gen_num):
+                    for _ in range(self.input_gen_num_retries):
+                        func.tried_seeds.append(seed)
+                        try:
+                            start = seed
+                            end = start + 1
+                            proc = subprocess.Popen(
+                                [
+                                    input_gen_executable,
+                                    inputs_dir,
+                                    str(start), str(end),
+                                    fname,
+                                ],
+                                stdout=self.get_stdout(),
+                                stderr=self.get_stderr())
 
-                    # TODO With the current implementation one of the input
-                    # gens timing out would mean we lose some completed ones.
-                    #
-                    # We should just move the input-gen loop in here and only do
-                    # one output at a time.
-                    out, err = proc.communicate(timeout=self.input_gen_timeout)
+                            # TODO With the current implementation one of the input
+                            # gens timing out would mean we lose some completed ones.
+                            #
+                            # We should just move the input-gen loop in here and only do
+                            # one output at a time.
+                            out, err = proc.communicate(timeout=self.input_gen_timeout)
 
-                    if proc.returncode != 0:
-                        self.print('Input gen process failed: @{}'.format(fname))
-                    else:
-                        self.print('Input gen process succeeded: @{}'.format(fname))
-                        # Populate the generated inputs
-                        func.inputs = [
-                            os.path.join(inputs_dir,
-                                        '{}.input.{}.{}.bin'.format(os.path.basename(input_gen_executable), fname, str(i)))
-                            for i in range(start, end)]
-                        for inpt in func.inputs:
-                            # If the input gen process exited successfully these
-                            # _must_ be here
-                            assert(os.path.isfile(inpt))
+                            if proc.returncode != 0:
+                                self.print('Input gen process failed: @{}'.format(fname))
+                            else:
+                                self.print('Input gen process succeeded: @{}'.format(fname))
+                                # Populate the generated inputs
+                                fins = [os.path.join(inputs_dir,
+                                                    '{}.input.{}.{}.bin'.format(
+                                                        os.path.basename(input_gen_executable), fname, str(i)))
+                                    for i in range(start, end)]
+                                func.inputs += fins
+                                for inpt in func.inputs:
+                                    # If the input gen process exited successfully these
+                                    # _must_ be here
+                                    assert(os.path.isfile(inpt))
+                                func.succeeded_seeds += list(range(start, end))
 
-                except subprocess.CalledProcessError as e:
-                    self.print('Input gen process failed: @{}'.format(fname))
-                except subprocess.TimeoutExpired as e:
-                    self.print('Input gen timed out! Terminating...: @{}'.format(fname))
-                    proc.terminate()
-                    try:
-                        proc.communicate(timeout=1)
-                    except subprocess.TimeoutExpired as e:
-                        self.print("Termination timed out! Killing...")
-                        proc.kill()
-                        proc.communicate()
-                        self.print("Killed.")
+                                break
+
+                        except subprocess.CalledProcessError as e:
+                            self.print('Input gen process failed: @{}'.format(fname))
+                        except subprocess.TimeoutExpired as e:
+                            self.print('Input gen timed out! Terminating...: @{}'.format(fname))
+                            proc.terminate()
+                            try:
+                                proc.communicate(timeout=1)
+                            except subprocess.TimeoutExpired as e:
+                                self.print("Termination timed out! Killing...")
+                                proc.kill()
+                                proc.communicate()
+                                self.print("Killed.")
             available_functions_file.close()
 
 
