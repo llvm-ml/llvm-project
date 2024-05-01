@@ -82,6 +82,10 @@ int main(int argc, char **argv) {
 
   std::ifstream Input(InputName, std::ios::in | std::ios::binary);
 
+  auto OASize = readV<uintptr_t>(Input);
+  ObjectAddressing OA;
+  OA.setSize(OASize);
+
   auto Seed = readV<uint32_t>(Input);
   Gen.seed(Seed);
 
@@ -131,9 +135,9 @@ int main(int argc, char **argv) {
              (void *)nullptr);
       return;
     }
-    VoidPtrTy LocalPtr = globalPtrToLocalPtr(GlobalPtr);
-    ObjectTy Obj = Objects[globalPtrToObjIdx(GlobalPtr)];
-    intptr_t Offset = getOffsetFromObjBasePtr(LocalPtr);
+    VoidPtrTy LocalPtr = OA.globalPtrToLocalPtr(GlobalPtr);
+    ObjectTy Obj = Objects[OA.globalPtrToObjIdx(GlobalPtr)];
+    intptr_t Offset = OA.getOffsetFromObjBasePtr(LocalPtr);
     VoidPtrTy RealPtr = Obj.Start + Obj.BaseOffset + Offset;
     *PtrLoc = RealPtr;
     INPUTGEN_DEBUG(printf("Relocate %s %p -> %p\n", Type, (void *)GlobalPtr,

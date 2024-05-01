@@ -31,7 +31,7 @@ template <typename T> static T alignStart(T Ptr, intptr_t Alignment) {
 
 template <typename T> static T alignEnd(T Ptr, intptr_t Alignment) {
   intptr_t IPtr = reinterpret_cast<intptr_t>(Ptr);
-  return reinterpret_cast<intptr_t>((((IPtr - 1) / Alignment) + 1) * Alignment);
+  return reinterpret_cast<T>((((IPtr - 1) / Alignment) + 1) * Alignment);
 }
 
 static VoidPtrTy advance(VoidPtrTy Ptr, uint64_t Bytes) {
@@ -43,12 +43,14 @@ static intptr_t diff(VoidPtrTy LHS, VoidPtrTy RHS) {
 }
 
 struct ObjectTy {
-  ObjectTy(size_t Idx, bool Artificial = true) : Idx(Idx) {}
-  ~ObjectTy() {
-    free(Output);
-    free(Input);
-    free(Used);
+  const ObjectAddressing &OA;
+  ObjectTy(size_t Idx, const ObjectAddressing &OA, VoidPtrTy Output,
+           VoidPtrTy Input, VoidPtrTy Used)
+      : OA(OA), Idx(Idx), Output(Output), Input(Input), Used(Used) {
+    AllocationSize = OA.MaxObjectSize;
+    AllocationOffset = OA.getOffsetFromObjBasePtr(nullptr);
   }
+  ~ObjectTy() {}
 
   struct AlignedMemoryChunk {
     VoidPtrTy Ptr;
@@ -57,26 +59,17 @@ struct ObjectTy {
   };
 
   AlignedMemoryChunk getAlignedInputMemory() {
-    VoidPtrTy Start = Input;
-    VoidPtrTy End = Input + AllocationSize;
+    VoidPtrTy Start = alignStart(LowestUsedOffset + Input, ObjAlignment);
+    VoidPtrTy End = alignEnd(HighestUsedOffset + Input, ObjAlignment);
     assert(reinterpret_cast<intptr_t>(Start) % ObjAlignment == 0 &&
            reinterpret_cast<intptr_t>(End) % ObjAlignment == 0);
-    while (Start != End && !anyUsed(Start, ObjAlignment))
-      Start = Start + ObjAlignment;
-    while (Start != End && !anyUsed(End - ObjAlignment, ObjAlignment))
-      End = End - ObjAlignment;
     return {Start, End - Start, Start - Input};
-  }
-
-  VoidPtrTy getRealPtr(VoidPtrTy Ptr) {
-    return advance(Output, getOffsetFromObjBasePtr(Ptr) - AllocationOffset);
   }
 
   template <typename T> T read(VoidPtrTy Ptr, uint32_t Size);
 
   template <typename T> void write(T Val, VoidPtrTy Ptr, uint32_t Size) {
-    intptr_t Offset = getOffsetFromObjBasePtr(Ptr);
-    ensureAllocation(Offset, Size);
+    intptr_t Offset = OA.getOffsetFromObjBasePtr(Ptr);
     if constexpr (std::is_pointer<T>::value)
       if (!allUsed(Offset, Size))
         Ptrs.insert(Offset);
@@ -94,13 +87,8 @@ private:
   // TODO make this a bit-vector
   uint8_t *Used = nullptr;
 
-  /// Returns true if it was already allocated
-  bool ensureAllocation(intptr_t Offset, uint32_t Size) {
-    if (isAllocated(Offset, Size))
-      return true;
-    reallocateData(Offset, Size);
-    return false;
-  }
+  intptr_t LowestUsedOffset = 0;
+  intptr_t HighestUsedOffset = 0;
 
   bool anyUsed(VoidPtrTy Ptr, uint32_t Size) {
     return anyUsed(diff(Ptr, Input), Size);
@@ -127,6 +115,11 @@ private:
   void markUsed(intptr_t Offset, uint32_t Size) {
     for (unsigned It = 0; It < Size; It++)
       Used[Offset - AllocationOffset] = 1;
+
+    if (LowestUsedOffset > Offset)
+      LowestUsedOffset = Offset;
+    if (HighestUsedOffset < Offset + Size)
+      HighestUsedOffset = Offset + Size;
   }
 
   bool isAllocated(intptr_t Offset, uint32_t Size) {
@@ -153,60 +146,6 @@ private:
         markUsed(Offset + It, 1);
       }
     }
-  }
-
-  template <typename T>
-  void extendMemory(T *&OldMemory, intptr_t NewAllocationSize,
-                    intptr_t NewAllocationOffset) {
-    T *NewMemory = reinterpret_cast<T *>(calloc(NewAllocationSize, 1));
-    memcpy(advance(NewMemory, AllocationOffset - NewAllocationOffset),
-           OldMemory, AllocationSize);
-    free(OldMemory);
-    OldMemory = NewMemory;
-  };
-
-  /// Reallocates the data so as to make the memory at `Offset` with length
-  /// `Size` available
-  void reallocateData(intptr_t Offset, uint32_t Size) {
-    assert(!isAllocated(Offset, Size));
-
-    intptr_t AllocatedMemoryStartOffset = AllocationOffset;
-    intptr_t AllocatedMemoryEndOffset =
-        AllocatedMemoryStartOffset + AllocationSize;
-    intptr_t NewAllocatedMemoryStartOffset = AllocatedMemoryStartOffset;
-    intptr_t NewAllocatedMemoryEndOffset = AllocatedMemoryEndOffset;
-
-    intptr_t AccessStartOffset = Offset;
-    intptr_t AccessEndOffset = AccessStartOffset + Size;
-
-    if (AccessStartOffset < AllocatedMemoryStartOffset) {
-      // Extend the allocation in the negative direction
-      NewAllocatedMemoryStartOffset = alignStart(
-          std::min(2 * AccessStartOffset, -MinObjAllocation), ObjAlignment);
-    }
-    if (AccessEndOffset >= AllocatedMemoryEndOffset) {
-      // Extend the allocation in the positive direction
-      NewAllocatedMemoryEndOffset = alignEnd(
-          std::max(2 * AccessEndOffset, MinObjAllocation), ObjAlignment);
-    }
-
-    intptr_t NewAllocationOffset = NewAllocatedMemoryStartOffset;
-    intptr_t NewAllocationSize =
-        NewAllocatedMemoryEndOffset - NewAllocatedMemoryStartOffset;
-
-    INPUTGEN_DEBUG(
-        printf("Reallocating data in Object %zu for access at %ld with size %d "
-               "from offset "
-               "%ld, size %ld to offset %ld, size %ld.\n",
-               Idx, Offset, Size, AllocationOffset, AllocationSize,
-               NewAllocationOffset, NewAllocationSize));
-
-    extendMemory(Input, NewAllocationSize, NewAllocationOffset);
-    extendMemory(Output, NewAllocationSize, NewAllocationOffset);
-    extendMemory(Used, NewAllocationSize, NewAllocationOffset);
-
-    AllocationSize = NewAllocationSize;
-    AllocationOffset = NewAllocationOffset;
   }
 };
 
@@ -264,9 +203,12 @@ struct InputGenRTTy {
     assert(OutputMem.allocate(Size, OA.MaxObjectSize));
     assert(InputMem.allocate(Size, OA.MaxObjectSize));
     assert(UsedMem.allocate(Size, OA.MaxObjectSize));
+
+    ObjIdxOffset = OA.globalPtrToObjIdx(OutputMem.AlignedMemory);
   }
   ~InputGenRTTy() { report(); }
 
+  intptr_t ObjIdxOffset;
   int32_t Seed, SeedStub;
   std::string FuncIdent;
   std::string OutputDir;
@@ -307,7 +249,10 @@ struct InputGenRTTy {
 
   size_t getNewObj(uint64_t Size, bool Artifical) {
     size_t Idx = Objects.size();
-    Objects.push_back(std::make_unique<ObjectTy>(Idx, /*Artificial=*/true));
+    Objects.push_back(std::make_unique<ObjectTy>(
+        Idx, OA, OutputMem.AlignedMemory + Idx * OA.MaxObjectSize,
+        InputMem.AlignedMemory + Idx * OA.MaxObjectSize,
+        UsedMem.AlignedMemory + Idx * OA.MaxObjectSize));
     return Idx;
   }
 
@@ -320,9 +265,8 @@ struct InputGenRTTy {
   }
 
   ObjectTy *globalPtrToObj(VoidPtrTy GlobalPtr) {
-    size_t Idx = OA.globalPtrToObjIdx(GlobalPtr);
-    // Idx > 0 because Idx = 0 is the NULL pointer (object).
-    assert(Idx > 0 && Idx < Objects.size());
+    size_t Idx = OA.globalPtrToObjIdx(GlobalPtr) - ObjIdxOffset;
+    assert(Idx >= 0 && Idx < Objects.size());
     return Objects[Idx].get();
   }
 
@@ -331,7 +275,8 @@ struct InputGenRTTy {
     NumNewValues++;
     if (rand(Stub) % 50) {
       size_t ObjIdx = getNewObj(/*ignored currently*/ 1024 * 1024, true);
-      VoidPtrTy Ptr = OA.localPtrToGlobalPtr(ObjIdx, OA.getObjBasePtr());
+      VoidPtrTy Ptr =
+          OA.localPtrToGlobalPtr(ObjIdx + ObjIdxOffset, OA.getObjBasePtr());
       INPUTGEN_DEBUG(printf("New Obj #%lu at ptr %p\n", ObjIdx, (void *)Ptr));
       return Ptr;
     }
@@ -358,10 +303,7 @@ struct InputGenRTTy {
     *ReplGlobal = OA.localPtrToGlobalPtr(Idx, OA.getObjBasePtr());
   }
 
-  VoidPtrTy translatePtr(VoidPtrTy GlobalPtr) {
-    return globalPtrToObj(GlobalPtr)->getRealPtr(
-        OA.globalPtrToLocalPtr(GlobalPtr));
-  }
+  VoidPtrTy translatePtr(VoidPtrTy GlobalPtr) { return GlobalPtr; }
 
   std::vector<size_t> Globals;
 
@@ -405,7 +347,8 @@ struct InputGenRTTy {
     // fprintf(ReportOut, "Heap ValMap: %lu\n", Heap->ValMap.size());
     fprintf(ReportOut, "Objects (%zu total)\n", Objects.size());
 
-    writeV(InputOut, SeedStub);
+    writeV<uintptr_t>(InputOut, OA.Size);
+    writeV<uint32_t>(InputOut, SeedStub);
 
     auto BeforeTotalSize = InputOut.tellp();
     uint64_t TotalSize = 0;
@@ -486,12 +429,11 @@ static InputGenRTTy &getInputGenRT() { return *InputGenRT; }
 
 template <typename T> T ObjectTy::read(VoidPtrTy Ptr, uint32_t Size) {
   intptr_t Offset = reinterpret_cast<intptr_t>(Ptr) -
-                    reinterpret_cast<intptr_t>(getObjBasePtr());
-  bool WasAllocated = ensureAllocation(Offset, Size);
+                    reinterpret_cast<intptr_t>(OA.getObjBasePtr());
 
   T *OutputLoc =
       reinterpret_cast<T *>(advance(Output, -AllocationOffset + Offset));
-  if (WasAllocated && allUsed(Offset, Size))
+  if (allUsed(Offset, Size))
     return *OutputLoc;
 
   T Val = getInputGenRT().getNewValue<T>();
