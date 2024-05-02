@@ -156,6 +156,8 @@ class InputGenModule:
 
                 if not os.path.isfile(input_gen_executable):
                     continue
+                if not os.path.isfile(input_run_executable):
+                    continue
 
                 # Only attach these to the Function if they exist
                 os.makedirs(inputs_dir, exist_ok=True)
@@ -171,6 +173,7 @@ class InputGenModule:
                         func.tried_seeds.append(seed)
                         try:
                             start = seed
+                            seed += 1
                             end = start + 1
                             iggenargs = [
                                     input_gen_executable,
