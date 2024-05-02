@@ -325,11 +325,15 @@ public:
                          std::string RuntimeName) {
     if (ClCompileInputGenExecutables) {
       outs() << "Compiling " << ExecutableName << "\n";
-      SmallVector<StringRef, 10> Args = {
-          Clang,       "-fopenmp", "-O0", "-ldl",        "-rdynamic",
-          RuntimeName, ModuleName, "-o",  ExecutableName};
-      if (ClDebug)
+      SmallVector<StringRef, 10> Args = {Clang,       "-fopenmp",    "-ldl",
+                                         "-rdynamic", RuntimeName,   ModuleName,
+                                         "-o",        ExecutableName};
+      if (ClDebug) {
         Args.push_back("-g");
+        Args.push_back("-O0");
+      } else {
+        Args.push_back("-O3");
+      }
       std::string ErrMsg;
       int Res = sys::ExecuteAndWait(
           Args[0], Args, /*Env=*/std::nullopt, /*Redirects=*/{},
