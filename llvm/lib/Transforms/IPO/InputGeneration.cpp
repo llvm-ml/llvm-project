@@ -426,6 +426,24 @@ bool ModuleInputGenInstrumenter::instrumentClEntryPoint(Module &M) {
   return instrumentModuleForFunction(M, *EntryPoint);
 }
 
+static void renameGlobals(Module &M) {
+  // Some modules define their own 'malloc' etc. or make aliases to existing
+  // functions. We do not want them to override any definition that we depend
+  // on in our runtime, thus, rename all globals.
+  auto Rename = [](auto &S) {
+    if (!S.isDeclaration())
+      S.setName("__inputgen_renamed_" + S.getName());
+  };
+  for (auto &X : M.globals())
+    Rename(X);
+  for (auto &X : M.functions())
+    Rename(X);
+  for (auto &X : M.aliases())
+    Rename(X);
+  for (auto &X : M.ifuncs())
+    Rename(X);
+}
+
 bool ModuleInputGenInstrumenter::instrumentModule(Module &M) {
 
   switch (IGI.Mode) {
@@ -440,6 +458,8 @@ bool ModuleInputGenInstrumenter::instrumentModule(Module &M) {
 
   IGI.initializeCallbacks(M);
   IGI.provideGlobals(M);
+
+  renameGlobals(M);
 
   switch (IGI.Mode) {
   case IG_Run:
@@ -615,6 +635,7 @@ void InputGenInstrumenter::stubDeclarations(Module &M, TargetLibraryInfo &TLI) {
       continue;
 
     F.setLinkage(GlobalValue::WeakAnyLinkage);
+    F.setName("__inputgen_renamed_" + F.getName());
     auto *EntryBB = BasicBlock::Create(*Ctx, "entry", &F);
 
     IRBuilder<> IRB(EntryBB);

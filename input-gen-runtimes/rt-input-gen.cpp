@@ -584,7 +584,7 @@ int main(int argc, char **argv) {
   std::string FuncName = ("__inputgen_entry");
   std::string FuncIdent = "";
   if (argc == 5) {
-    FuncName += "_";
+    FuncName += "___inputgen_renamed_";
     FuncName += argv[4];
     FuncIdent += argv[4];
   }

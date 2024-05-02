@@ -53,11 +53,13 @@ RW(int32_t, i32)
 RW(int64_t, i64)
 RW(float, float)
 RW(double, double)
-RW(void *, ptr)
+RW(VoidPtrTy, ptr)
+RW(__int128, i128)
+RW(long double, x86_fp80)
 
 #undef RW
 
-void free(void *) {}
+// void free(void *) {}
 }
 
 int main(int argc, char **argv) {
@@ -69,7 +71,7 @@ int main(int argc, char **argv) {
   char *InputName = argv[1];
   std::string FuncName = ("__inputrun_entry");
   if (argc == 3) {
-    FuncName += "_";
+    FuncName += "___inputgen_renamed_";
     FuncName += argv[2];
   }
 
