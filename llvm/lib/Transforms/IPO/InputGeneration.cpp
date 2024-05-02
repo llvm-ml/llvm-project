@@ -629,6 +629,12 @@ void InputGenInstrumenter::stubDeclarations(Module &M, TargetLibraryInfo &TLI) {
 }
 
 void InputGenInstrumenter::provideGlobals(Module &M) {
+  // Erase global c/dtors
+  if (GlobalVariable *GVCtor = M.getNamedGlobal("llvm.global_ctors"))
+    GVCtor->eraseFromParent();
+  if (GlobalVariable *GVDtor = M.getNamedGlobal("llvm.global_dtors"))
+    GVDtor->eraseFromParent();
+
   for (GlobalVariable &GV : M.globals()) {
     if (isLibCGlobal(GV.getName()))
       continue;
