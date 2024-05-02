@@ -132,6 +132,7 @@ class InputGenModule:
                            check=True,
                            stdout=self.get_stdout(),
                            stderr=self.get_stderr())
+            self.print("input-gen args:", " ".join(igargs))
         except Exception:
             self.print('Failed to instrument')
 
@@ -171,13 +172,14 @@ class InputGenModule:
                         try:
                             start = seed
                             end = start + 1
-                            proc = subprocess.Popen(
-                                [
+                            iggenargs = [
                                     input_gen_executable,
                                     inputs_dir,
                                     str(start), str(end),
                                     fname,
-                                ],
+                                ]
+                            proc = subprocess.Popen(
+                                iggenargs,
                                 stdout=self.get_stdout(),
                                 stderr=self.get_stderr())
 
@@ -190,6 +192,7 @@ class InputGenModule:
 
                             if proc.returncode != 0:
                                 self.print('Input gen process failed: @{}'.format(fname))
+                                self.print('ig args generation:', ' '.join(iggenargs))
                             else:
                                 self.print('Input gen process succeeded: @{}'.format(fname))
                                 # Populate the generated inputs
@@ -208,8 +211,10 @@ class InputGenModule:
 
                         except subprocess.CalledProcessError as e:
                             self.print('Input gen process failed: @{}'.format(fname))
+                            self.print('ig args generation:', ' '.join(iggenargs))
                         except subprocess.TimeoutExpired as e:
                             self.print('Input gen timed out! Terminating...: @{}'.format(fname))
+                            self.print('ig args generation:', ' '.join(iggenargs))
                             proc.terminate()
                             try:
                                 proc.communicate(timeout=1)
