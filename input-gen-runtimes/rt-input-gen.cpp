@@ -313,8 +313,6 @@ struct InputGenRTTy {
         OA.localPtrToGlobalPtr(Idx + OutputObjIdxOffset, OA.getObjBasePtr());
   }
 
-  VoidPtrTy translatePtr(VoidPtrTy GlobalPtr) { return GlobalPtr; }
-
   std::vector<size_t> Globals;
 
   uint64_t NumNewValues = 0;
@@ -561,12 +559,6 @@ ARG(VoidPtrTy, ptr)
 ARG(__int128, i128)
 ARG(long double, x86_fp80)
 #undef ARG
-
-VoidPtrTy __inputgen_translate_ptr(VoidPtrTy Ptr) {
-  VoidPtrTy T = getInputGenRT().translatePtr(Ptr);
-  INPUTGEN_DEBUG(printf("Translate %p -> %p\n", (void *)Ptr, (void *)T));
-  return T;
-}
 
 // TODO Need to rename this when instrumenting
 // void free(void *) {}
