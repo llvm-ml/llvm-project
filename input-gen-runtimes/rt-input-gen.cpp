@@ -183,7 +183,7 @@ struct InputGenRTTy {
     if (Err && VERBOSE)
       printf("Could not set bigger limit on malloc: %s\n", strerror(errno));
 
-    uintptr_t Size = (uintptr_t)1024 /*G*/ * 1024 /*M*/ * 1024 /*K*/ * 1024;
+    uintptr_t Size = (uintptr_t)16 /*G*/ * 1024 /*M*/ * 1024 /*K*/ * 1024;
     static_assert(sizeof(Size) >= 8);
     // 3/4 of the address space goes to in-object addressing
     do {
