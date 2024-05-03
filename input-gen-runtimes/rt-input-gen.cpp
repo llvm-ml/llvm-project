@@ -169,9 +169,9 @@ std::vector<int32_t> GetObjects;
 
 struct InputGenRTTy {
   InputGenRTTy(const char *ExecPath, const char *OutputDir,
-               const char *FuncIdent, int Seed)
-      : Seed(Seed), FuncIdent(FuncIdent), OutputDir(OutputDir),
-        ExecPath(ExecPath) {
+               const char *FuncIdent, VoidPtrTy StackPtr, int Seed)
+      : StackPtr(StackPtr), Seed(Seed), FuncIdent(FuncIdent),
+        OutputDir(OutputDir), ExecPath(ExecPath) {
     Gen.seed(Seed);
     GenStub.seed(Seed + 1);
     if (this->FuncIdent != "") {
@@ -202,6 +202,7 @@ struct InputGenRTTy {
   }
   ~InputGenRTTy() { report(); }
 
+  VoidPtrTy StackPtr;
   intptr_t OutputObjIdxOffset;
   intptr_t InputObjIdxOffset;
   int32_t Seed, SeedStub;
@@ -251,9 +252,20 @@ struct InputGenRTTy {
     return Idx;
   }
 
+  // Returns nullptr if it is not an object managed by us - a stack pointer
   ObjectTy *globalPtrToObj(VoidPtrTy GlobalPtr) {
     size_t Idx = OA.globalPtrToObjIdx(GlobalPtr) - OutputObjIdxOffset;
-    assert(Idx >= 0 && Idx < Objects.size());
+    INPUTGEN_DEBUG(std::cerr << "Access: " << (void *)GlobalPtr << " Obj #"
+                             << Idx << std::endl);
+    bool IsExistingObj = Idx >= 0 && Idx < Objects.size();
+    bool IsOutsideObjMemory = Idx > OA.MaxObjectNum || Idx < 0;
+    assert(IsExistingObj || IsOutsideObjMemory);
+    if (IsOutsideObjMemory) {
+      // This means it is probably a stack pointer. The assert checks one of the
+      // bounds - the other one is unchecked TODO?
+      assert(StackPtr >= GlobalPtr);
+      return nullptr;
+    }
     return Objects[Idx].get();
   }
 
@@ -295,12 +307,15 @@ struct InputGenRTTy {
 
   template <typename T> void write(VoidPtrTy Ptr, T Val, uint32_t Size) {
     ObjectTy *Obj = globalPtrToObj(Ptr);
-    Obj->write<T>(Val, OA.globalPtrToLocalPtr(Ptr), Size);
+    if (Obj)
+      Obj->write<T>(Val, OA.globalPtrToLocalPtr(Ptr), Size);
   }
 
   template <typename T> T read(VoidPtrTy Ptr, VoidPtrTy Base, uint32_t Size) {
     ObjectTy *Obj = globalPtrToObj(Ptr);
-    return Obj->read<T>(OA.globalPtrToLocalPtr(Ptr), Size);
+    if (Obj)
+      return Obj->read<T>(OA.globalPtrToLocalPtr(Ptr), Size);
+    return *reinterpret_cast<T *>(Ptr);
   }
 
   void registerGlobal(VoidPtrTy Global, VoidPtrTy *ReplGlobal,
@@ -565,6 +580,13 @@ ARG(long double, x86_fp80)
 }
 
 int main(int argc, char **argv) {
+  VERBOSE = (bool)getenv("VERBOSE");
+
+  uint8_t Tmp;
+  VoidPtrTy StackPtr = &Tmp;
+  INPUTGEN_DEBUG(std::cerr << "Stack pointer: " << (void *)StackPtr
+                           << std::endl);
+
   if (argc != 5 && argc != 4) {
     std::cerr << "Wrong usage." << std::endl;
     return 1;
@@ -580,8 +602,6 @@ int main(int argc, char **argv) {
     FuncName += argv[4];
     FuncIdent += argv[4];
   }
-
-  VERBOSE = (bool)getenv("VERBOSE");
 
   int Size = End - Start;
   if (Size <= 0)
@@ -605,7 +625,8 @@ int main(int argc, char **argv) {
   }
 
   for (int I = Start; I < End; I++) {
-    InputGenRTTy LocalInputGenRT(argv[0], OutputDir, FuncIdent.c_str(), I);
+    InputGenRTTy LocalInputGenRT(argv[0], OutputDir, FuncIdent.c_str(),
+                                 StackPtr, I);
     InputGenRT = &LocalInputGenRT;
     EntryFn(argc, argv);
   }

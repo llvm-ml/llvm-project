@@ -17,6 +17,7 @@ def add_option_args(parser):
     parser.add_argument('--input-run-runtime', default='./input-gen-runtimes/rt-run.cpp')
     parser.add_argument('--verbose', action='store_true')
     parser.add_argument('--no-verbose', dest='verbose', action='store_false')
+    parser.add_argument('-g', action='store_true')
     parser.set_defaults(verbose=False)
 
 class Function:
@@ -128,6 +129,9 @@ class InputGenModule:
                 self.input_module,
                 '--compile-input-gen-executables'
             ]
+            if self.g:
+                igargs.append('-g')
+
             subprocess.run(igargs,
                            check=True,
                            stdout=self.get_stdout(),
