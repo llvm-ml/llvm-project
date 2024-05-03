@@ -180,8 +180,9 @@ struct InputGenRTTy {
 
     const struct rlimit Rlimit = {RLIM_INFINITY, RLIM_INFINITY};
     int Err = setrlimit(RLIMIT_AS, &Rlimit);
-    if (Err && VERBOSE)
-      printf("Could not set bigger limit on malloc: %s\n", strerror(errno));
+    if (Err)
+      INPUTGEN_DEBUG(printf("Could not set bigger limit on malloc: %s\n",
+                            strerror(errno)));
 
     uintptr_t Size = (uintptr_t)16 /*G*/ * 1024 /*M*/ * 1024 /*K*/ * 1024;
     static_assert(sizeof(Size) >= 8);
