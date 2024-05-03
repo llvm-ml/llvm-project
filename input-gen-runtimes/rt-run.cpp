@@ -16,12 +16,18 @@ namespace {
 int VERBOSE = 0;
 }
 
+struct ObjectTy {
+  VoidPtrTy Start;
+  intptr_t Size;
+  intptr_t BaseOffset;
+};
+
 static unsigned NumStubs;
 static VoidPtrTy StubsMemory = nullptr;
 static unsigned CurStub = 0;
 
-static std::vector<char *> Globals;
-static size_t GlobalsIt = 0;
+static std::vector<ObjectTy> Globals;
+static size_t CurGlobal = 0;
 
 static std::mt19937 Gen;
 static std::uniform_int_distribution<> Rand;
@@ -37,10 +43,15 @@ template <typename T> T getNewValue() {
 }
 
 extern "C" {
-void __inputgen_global(int32_t NumGlobals, void *Global, void **ReplGlobal,
+void __inputgen_global(int32_t NumGlobals, VoidPtrTy Global, void **ReplGlobal,
                        int32_t GlobalSize) {
-  assert(Globals.size() > GlobalsIt);
-  memcpy(Global, Globals[GlobalsIt], GlobalSize);
+  assert(Globals.size() > CurGlobal);
+  ObjectTy Obj = Globals[CurGlobal];
+  // We cannot access globals with negative offsets
+  assert(Obj.BaseOffset >= 0);
+  assert(Obj.Size <= GlobalSize);
+  memcpy(Global + Obj.BaseOffset, Obj.Start, Obj.Size);
+  CurGlobal++;
 }
 
 #define RW(TY, NAME)                                                           \
@@ -97,10 +108,6 @@ int main(int argc, char **argv) {
   auto NumObjects = readV<uint32_t>(Input);
   INPUTGEN_DEBUG(printf("NO %u\n", NumObjects));
   VoidPtrTy CurMemory = (VoidPtrTy)Memory;
-  struct ObjectTy {
-    VoidPtrTy Start;
-    intptr_t BaseOffset;
-  };
   std::vector<ObjectTy> Objects;
   for (uint32_t I = 0; I < NumObjects; I++) {
     [[maybe_unused]] auto Idx = readV<uintptr_t>(Input);
@@ -109,7 +116,7 @@ int main(int argc, char **argv) {
     auto Offset = readV<intptr_t>(Input);
     INPUTGEN_DEBUG(printf("O #%u -> size %ld offset %ld at %p\n", I, Size,
                           Offset, (void *)CurMemory));
-    Objects.push_back({CurMemory, Offset});
+    Objects.push_back({CurMemory, Size, Offset});
     Input.read(ccast(CurMemory), Size);
     CurMemory += Size;
   }
@@ -120,12 +127,8 @@ int main(int argc, char **argv) {
     auto ObjIdx = readV<uint32_t>(Input);
     assert(ObjIdx < NumObjects);
     auto Obj = Objects[ObjIdx];
-    VoidPtrTy GlobalMem = Obj.Start + Obj.BaseOffset;
-    // We cannot access globals with negative offsets
-    assert(Obj.BaseOffset >= 0);
-    Globals.push_back(ccast(GlobalMem));
-    INPUTGEN_DEBUG(
-        printf("G #%u -> #%u, addr %p\n", I, ObjIdx, (void *)GlobalMem));
+    Globals.push_back(Obj);
+    INPUTGEN_DEBUG(printf("G #%u -> #%u\n", I, ObjIdx));
   }
 
   auto RelocatePointer = [&](VoidPtrTy *PtrLoc, const char *Type) {
