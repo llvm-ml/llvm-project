@@ -5,8 +5,8 @@ set -x
 
 module load python/3.10.8
 
-START=0
-END=7000
+START=${START:=0}
+END=${END:=7000}
 
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 CURDATE=$(date +"%Y-%m-%dT%H:%M:%S%z")
@@ -42,4 +42,4 @@ NUM_CPU=40
     --input-gen-num-retries 5 \
     --input-gen-timeout 5 \
     --input-run-timeout 5 \
-    --num-procs="$NUM_CPU" &> "$JOB_LOG"
+    --num-procs="$NUM_CPU" $ADDITIONAL_FLAGS &> "$JOB_LOG"
