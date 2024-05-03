@@ -39,20 +39,30 @@ class ModuleHandler:
             return igm.get_statistics()
 
 def precompile_runtimes(args):
-    print('Precompiling runtimes... ', end='', flush=True)
-    args.input_gen_runtime = precompile_runtime(args.input_gen_runtime)
-    args.input_run_runtime = precompile_runtime(args.input_run_runtime)
+    print('Precompiling runtimes...')
+    args.input_gen_runtime = precompile_runtime(args.input_gen_runtime, args.g)
+    args.input_run_runtime = precompile_runtime(args.input_run_runtime, args.g)
     print('Done.')
 
-def precompile_runtime(fname):
+def precompile_runtime(fname, debug):
     if (fname.endswith('.c') or
         fname.endswith('.cpp') or
         fname.endswith('.cxx')):
 
         obj = fname + '.o'
+        compargs = 'clang++ -std=c++17 -c'.split(' ') + [fname, '-o', obj]
+        if debug:
+            compargs.append('-O0')
+            compargs.append('-g')
+        else:
+            compargs.append('-O3')
+            compargs.append('-DNDEBUG')
+
+        if args.verbose:
+            print('Comp args:', ' '.join(compargs))
+
         subprocess.run(
-            'clang++ -std=c++17 -c -O1 -g'.split(' ') +
-            [fname, '-o', obj],
+            compargs,
             check=True)
         return obj
     else:

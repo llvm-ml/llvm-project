@@ -333,6 +333,7 @@ public:
         Args.push_back("-O0");
       } else {
         Args.push_back("-O3");
+        Args.push_back("-DNDEBUG");
       }
       std::string ErrMsg;
       int Res = sys::ExecuteAndWait(
