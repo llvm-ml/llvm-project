@@ -194,9 +194,11 @@ struct InputGenRTTy {
     INPUTGEN_DEBUG(printf("Max obj size: 0x%lx, max obj num: %lu\n",
                           OA.MaxObjectSize, OA.MaxObjectNum));
 
-    assert(OutputMem.allocate(Size, OA.MaxObjectSize));
-    assert(InputMem.allocate(Size, OA.MaxObjectSize));
-    assert(UsedMem.allocate(Size, OA.MaxObjectSize));
+    bool Success;
+    Success = InputMem.allocate(Size, OA.MaxObjectSize);
+    assert(Success);
+    Success = UsedMem.allocate(Size, OA.MaxObjectSize);
+    assert(Success);
 
     OutputObjIdxOffset = OA.globalPtrToObjIdx(OutputMem.AlignedMemory);
     InputObjIdxOffset = OA.globalPtrToObjIdx(InputMem.AlignedMemory);
