@@ -103,7 +103,7 @@ int main(int argc, char **argv) {
   };
   std::vector<ObjectTy> Objects;
   for (uint32_t I = 0; I < NumObjects; I++) {
-    auto Idx = readV<uintptr_t>(Input);
+    [[maybe_unused]] auto Idx = readV<uintptr_t>(Input);
     assert(I == Idx);
     auto Size = readV<intptr_t>(Input);
     auto Offset = readV<intptr_t>(Input);
@@ -146,7 +146,7 @@ int main(int argc, char **argv) {
   };
 
   for (uint32_t I = 0; I < NumObjects; I++) {
-    auto Idx = readV<uintptr_t>(Input);
+    [[maybe_unused]] auto Idx = readV<uintptr_t>(Input);
     assert(Idx == I);
     auto NumPtrs = readV<uintptr_t>(Input);
     INPUTGEN_DEBUG(printf("O #%u NP %lu\n", I, NumPtrs));
