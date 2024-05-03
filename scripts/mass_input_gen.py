@@ -50,7 +50,7 @@ def precompile_runtime(fname, debug):
         fname.endswith('.cxx')):
 
         obj = fname + '.o'
-        compargs = 'clang++ -std=c++17 -c'.split(' ') + [fname, '-o', obj]
+        compargs = 'clang++ -Wall -std=c++17 -c'.split(' ') + [fname, '-o', obj]
         if debug:
             compargs.append('-O0')
             compargs.append('-g')

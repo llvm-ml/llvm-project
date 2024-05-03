@@ -57,15 +57,17 @@ class Function:
 
         try:
             start_time = time.time()
-
-            proc = subprocess.Popen(
-                [
+            igrunargs = [
                     self.input_run_executable,
                     input,
                     self.name,
-                ],
+                ]
+            proc = subprocess.Popen(
+                igrunargs,
                 stdout=self.get_stdout(),
                 stderr=self.get_stderr())
+
+            self.print('ig args run:', ' '.join(igrunargs))
             out, err = proc.communicate(timeout=timeout)
 
             end_time = time.time()
@@ -131,12 +133,11 @@ class InputGenModule:
             ]
             if self.g:
                 igargs.append('-g')
-
+            self.print("input-gen args:", " ".join(igargs))
             subprocess.run(igargs,
                            check=True,
                            stdout=self.get_stdout(),
                            stderr=self.get_stderr())
-            self.print("input-gen args:", " ".join(igargs))
         except Exception:
             self.print('Failed to instrument')
 
@@ -185,6 +186,7 @@ class InputGenModule:
                                     str(start), str(end),
                                     fname,
                                 ]
+                            self.print('ig args generation:', ' '.join(iggenargs))
                             proc = subprocess.Popen(
                                 iggenargs,
                                 stdout=self.get_stdout(),
@@ -199,7 +201,6 @@ class InputGenModule:
 
                             if proc.returncode != 0:
                                 self.print('Input gen process failed: @{}'.format(fname))
-                                self.print('ig args generation:', ' '.join(iggenargs))
                             else:
                                 self.print('Input gen process succeeded: @{}'.format(fname))
                                 # Populate the generated inputs
@@ -218,10 +219,8 @@ class InputGenModule:
 
                         except subprocess.CalledProcessError as e:
                             self.print('Input gen process failed: @{}'.format(fname))
-                            self.print('ig args generation:', ' '.join(iggenargs))
                         except subprocess.TimeoutExpired as e:
                             self.print('Input gen timed out! Terminating...: @{}'.format(fname))
-                            self.print('ig args generation:', ' '.join(iggenargs))
                             proc.terminate()
                             try:
                                 proc.communicate(timeout=1)
