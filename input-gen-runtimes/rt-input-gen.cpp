@@ -98,7 +98,7 @@ private:
 
   bool anyUsed(intptr_t Offset, uint32_t Size) {
     for (unsigned It = 0; It < Size; It++)
-      if (isAllocated(Offset + It, 1) && Used[Offset - AllocationOffset])
+      if (isAllocated(Offset + It, 1) && Used[Offset + It - AllocationOffset])
         return true;
     return false;
   }
@@ -109,14 +109,14 @@ private:
 
   bool allUsed(intptr_t Offset, uint32_t Size) {
     for (unsigned It = 0; It < Size; It++)
-      if (!isAllocated(Offset + It, 1) || !Used[Offset - AllocationOffset])
+      if (!isAllocated(Offset + It, 1) || !Used[Offset + It - AllocationOffset])
         return false;
     return true;
   }
 
   void markUsed(intptr_t Offset, uint32_t Size) {
     for (unsigned It = 0; It < Size; It++)
-      Used[Offset - AllocationOffset] = 1;
+      Used[Offset + It - AllocationOffset] = 1;
 
     if (LowestUsedOffset > Offset)
       LowestUsedOffset = Offset;
