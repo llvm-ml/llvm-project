@@ -100,6 +100,7 @@ public:
   std::optional<InterestingMemoryAccess>
   isInterestingMemoryAccess(Instruction *I) const;
 
+  void instrumentCmp(ICmpInst *Cmp);
   void instrumentMop(const InterestingMemoryAccess &Access,
                      const DataLayout &DL);
   void instrumentAddress(const InterestingMemoryAccess &Access,
@@ -149,6 +150,7 @@ private:
 
   FunctionCallee InputGenMemmove, InputGenMemcpy, InputGenMemset;
   FunctionCallee UseCallback;
+  FunctionCallee CmpPtrCallback;
 
   bool InstrumentedForCoverage;
 };

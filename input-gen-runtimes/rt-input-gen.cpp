@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <bitset>
 #include <cassert>
 #include <cstddef>
@@ -10,12 +11,15 @@
 #include <dlfcn.h>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <map>
 #include <random>
 #include <set>
 #include <sys/resource.h>
+#include <sys/wait.h>
 #include <type_traits>
+#include <unistd.h>
 #include <vector>
 
 #include "rt.hpp"
@@ -25,6 +29,9 @@ int VERBOSE = 0;
 }
 
 static constexpr intptr_t MinObjAllocation = 64;
+static constexpr unsigned NullPtrProbability = 75;
+static constexpr int CmpPtrRetryProbability = 10;
+static constexpr int DefaultMaxGeneratedValue = 10;
 
 template <typename T> static T divFloor(T A, T B) {
   assert(B > 0);
@@ -257,15 +264,21 @@ template <typename T> static GenValTy toGenValTy(T A, int32_t IsPtr) {
   return U;
 }
 
-std::vector<int32_t> GetObjects;
+struct ObjCmpInfoTy {
+  size_t IdxOriginal, IdxOther;
+  intptr_t Offset;
+  bool Done = false;
+};
 
 struct InputGenRTTy {
   InputGenRTTy(const char *ExecPath, const char *OutputDir,
-               const char *FuncIdent, VoidPtrTy StackPtr, int Seed)
-      : StackPtr(StackPtr), Seed(Seed), FuncIdent(FuncIdent),
-        OutputDir(OutputDir), ExecPath(ExecPath) {
+               const char *FuncIdent, VoidPtrTy StackPtr, int Seed,
+               std::vector<ObjCmpInfoTy> ObjCmps,
+               std::function<void(ObjCmpInfoTy)> *ObjCmpCallback)
+      : ObjCmps(ObjCmps), ObjCmpCallback(ObjCmpCallback), StackPtr(StackPtr),
+        Seed(Seed), FuncIdent(FuncIdent), OutputDir(OutputDir),
+        ExecPath(ExecPath) {
     Gen.seed(Seed);
-    GenStub.seed(Seed + 1);
     if (this->FuncIdent != "") {
       this->FuncIdent += ".";
     }
@@ -288,7 +301,10 @@ struct InputGenRTTy {
 
     OutputObjIdxOffset = OA.globalPtrToObjIdx(OutputMem.AlignedMemory);
   }
-  ~InputGenRTTy() { report(); }
+  ~InputGenRTTy() {}
+
+  std::vector<ObjCmpInfoTy> ObjCmps;
+  std::function<void(ObjCmpInfoTy)> *ObjCmpCallback;
 
   VoidPtrTy StackPtr;
   intptr_t OutputObjIdxOffset;
@@ -296,7 +312,7 @@ struct InputGenRTTy {
   std::string FuncIdent;
   std::string OutputDir;
   std::filesystem::path ExecPath;
-  std::mt19937 Gen, GenStub;
+  std::mt19937 Gen;
   std::uniform_int_distribution<> Rand;
   struct AlignedAllocation {
     VoidPtrTy Memory = nullptr;
@@ -328,12 +344,39 @@ struct InputGenRTTy {
   AlignedAllocation OutputMem;
   ObjectAddressing OA;
 
-  int rand(bool Stub) { return Stub ? Rand(GenStub) : Rand(Gen); }
+  int rand() { return Rand(Gen); }
 
-  size_t getNewObj(uint64_t Size, bool Artifical) {
+  struct NewObj {
+    size_t Idx;
+    VoidPtrTy Ptr;
+  };
+  NewObj getNewPtr(uint64_t Size) {
     size_t Idx = Objects.size();
+    for (auto &ObjCmp : ObjCmps) {
+      if (ObjCmp.IdxOther == Idx && !ObjCmp.Done) {
+        // An offset of this object will be compared to ObjCmp.IdxOriginal at
+        // offset ObjCmp.Offset. Make sure that comparison will succeed
+        VoidPtrTy Ptr =
+            OA.localPtrToGlobalPtr(ObjCmp.IdxOriginal + OutputObjIdxOffset,
+                                   OA.getObjBasePtr()) +
+            ObjCmp.Offset;
+        INPUTGEN_DEBUG(printf("Pointer to existing obj #%lu at %p\n",
+                              ObjCmp.IdxOriginal, (void *)Ptr));
+        ObjCmp.Done = true;
+        return {ObjCmp.IdxOriginal, Ptr};
+      }
+    }
     Objects.push_back(std::make_unique<ObjectTy>(
         Idx, OA, OutputMem.AlignedMemory + Idx * OA.MaxObjectSize));
+    VoidPtrTy OutputPtr =
+        OA.localPtrToGlobalPtr(Idx + OutputObjIdxOffset, OA.getObjBasePtr());
+    INPUTGEN_DEBUG(
+        printf("New Obj #%lu at output ptr %p\n", Idx, (void *)OutputPtr));
+    return {Idx, OutputPtr};
+  }
+
+  size_t getObjIdx(VoidPtrTy GlobalPtr) {
+    size_t Idx = OA.globalPtrToObjIdx(GlobalPtr) - OutputObjIdxOffset;
     return Idx;
   }
 
@@ -341,7 +384,7 @@ struct InputGenRTTy {
   // memory allocated by malloc
   ObjectTy *globalPtrToObj(VoidPtrTy GlobalPtr) {
     assert(GlobalPtr);
-    size_t Idx = OA.globalPtrToObjIdx(GlobalPtr) - OutputObjIdxOffset;
+    size_t Idx = getObjIdx(GlobalPtr);
     bool IsExistingObj = Idx >= 0 && Idx < Objects.size();
     [[maybe_unused]] bool IsOutsideObjMemory = Idx > OA.MaxObjectNum || Idx < 0;
     assert(IsExistingObj || IsOutsideObjMemory);
@@ -353,6 +396,42 @@ struct InputGenRTTy {
     INPUTGEN_DEBUG(std::cerr << "Access to memory not handled by us: "
                              << (void *)GlobalPtr << std::endl);
     return nullptr;
+  }
+
+  void cmpPtr(VoidPtrTy A, VoidPtrTy B, int32_t Predicate) {
+    // Ignore null pointers for now
+    if (A == nullptr || B == nullptr)
+      return;
+
+    // Do not move this into the if. We want to consume a rand() even when this
+    // is disabled
+    bool ShouldCallback = !(rand() % CmpPtrRetryProbability);
+
+    if (!ObjCmpCallback)
+      return;
+
+    size_t IdxA = getObjIdx(A);
+    size_t IdxB = getObjIdx(B);
+    INPUTGEN_DEBUG(std::cerr << "CmpPtr " << (void *)A << " (#" << IdxA << ") "
+                             << (void *)B << " (#" << IdxB << ") "
+                             << std::endl);
+    // Globals cannot alias
+    if (std::find(Globals.begin(), Globals.end(), IdxA) != Globals.end() &&
+        std::find(Globals.begin(), Globals.end(), IdxB) != Globals.end()) {
+      INPUTGEN_DEBUG(std::cerr << "Compared globals, ignoring." << std::endl);
+      return;
+    }
+    if (IdxA != IdxB && ShouldCallback) {
+      if (IdxA > IdxB)
+        std::swap(IdxA, IdxB);
+      INPUTGEN_DEBUG(std::cerr
+                     << "Compared different objects, will retry input gen. "
+                     << IdxA << " " << IdxB << std::endl);
+      ObjCmpInfoTy ObjCmp = {
+          IdxA, IdxB, OA.globalPtrToLocalPtr(A) - OA.globalPtrToLocalPtr(B),
+          false};
+      (*ObjCmpCallback)(ObjCmp);
+    }
   }
 
   template <typename T> T getNewArg() {
@@ -368,22 +447,21 @@ struct InputGenRTTy {
     return V;
   }
 
-  template <typename T> T getNewValue(bool Stub = false, int Max = 10) {
+  template <typename T>
+  T getNewValue(bool Stub = false, int Max = DefaultMaxGeneratedValue) {
     static_assert(!std::is_pointer<T>::value);
     NumNewValues++;
-    T V = rand(Stub) % Max;
+    T V = rand() % Max;
     return V;
   }
 
   template <> VoidPtrTy getNewValue<VoidPtrTy>(bool Stub, int Max) {
     NumNewValues++;
-    if (rand(Stub) % 75) {
-      size_t ObjIdx = getNewObj(/*ignored currently*/ 1024 * 1024, true);
-      VoidPtrTy OutputPtr = OA.localPtrToGlobalPtr(ObjIdx + OutputObjIdxOffset,
-                                                   OA.getObjBasePtr());
-      INPUTGEN_DEBUG(
-          printf("New Obj #%lu at output ptr %p\n", ObjIdx, (void *)OutputPtr));
-      return OutputPtr;
+    if (rand() % NullPtrProbability) {
+      auto Obj = getNewPtr(0);
+      INPUTGEN_DEBUG(printf("New ptr: Obj #%lu at output ptr %p\n", Obj.Idx,
+                            (void *)Obj.Ptr));
+      return Obj.Ptr;
     }
     INPUTGEN_DEBUG(printf("New Obj = nullptr\n"));
     return nullptr;
@@ -404,12 +482,11 @@ struct InputGenRTTy {
 
   void registerGlobal(VoidPtrTy Global, VoidPtrTy *ReplGlobal,
                       int32_t GlobalSize) {
-    size_t Idx = getNewObj(GlobalSize, false);
-    Globals.push_back(Idx);
+    auto Obj = getNewPtr(GlobalSize);
+    Globals.push_back(Obj.Idx);
+    *ReplGlobal = Obj.Ptr;
     INPUTGEN_DEBUG(printf("Global %p replaced with Obj %zu @ %p\n",
-                          (void *)Global, Idx, (void *)ReplGlobal));
-    *ReplGlobal =
-        OA.localPtrToGlobalPtr(Idx + OutputObjIdxOffset, OA.getObjBasePtr());
+                          (void *)Global, Obj.Idx, (void *)ReplGlobal));
   }
 
   std::vector<size_t> Globals;
@@ -441,13 +518,13 @@ struct InputGenRTTy {
   }
 
   void report(std::ofstream &InputOut) {
-    printf("Args (%u total)\n", NumArgs);
-    for (size_t I = 0; I < NumArgs; ++I)
-      printf("Arg %zu: %p\n", I, (void *)GenVals[I].Content);
-    printf("Num new values: %lu\n", NumNewValues);
-    // fprintf(ReportOut, "Heap PtrMap: %lu\n", Heap->PtrMap.size());
-    // fprintf(ReportOut, "Heap ValMap: %lu\n", Heap->ValMap.size());
-    printf("Objects (%zu total)\n", Objects.size());
+    INPUTGEN_DEBUG({
+      printf("Args (%u total)\n", NumArgs);
+      for (size_t I = 0; I < NumArgs; ++I)
+        printf("Arg %zu: %p\n", I, (void *)GenVals[I].Content);
+      printf("Num new values: %lu\n", NumNewValues);
+      printf("Objects (%zu total)\n", Objects.size());
+    });
 
     writeV<uintptr_t>(InputOut, OA.Size);
     writeV<uintptr_t>(InputOut, OutputObjIdxOffset);
@@ -537,8 +614,6 @@ struct InputGenRTTy {
 };
 
 static InputGenRTTy *InputGenRT;
-#pragma omp threadprivate(InputGenRT)
-
 static InputGenRTTy &getInputGenRT() { return *InputGenRT; }
 
 template <typename T> T ObjectTy::read(VoidPtrTy Ptr, uint32_t Size) {
@@ -672,7 +747,13 @@ ARG(long double, x86_fp80)
 #undef ARG
 
 void __inputgen_use(VoidPtrTy Ptr, uint32_t Size) { useValue(Ptr, Size); }
+
+void __inputgen_cmp_ptr(VoidPtrTy A, VoidPtrTy B, int32_t Predicate) {
+  getInputGenRT().cmpPtr(A, B, Predicate);
 }
+}
+
+std::vector<ObjCmpInfoTy> ObjCmps;
 
 int main(int argc, char **argv) {
   VERBOSE = (bool)getenv("VERBOSE");
@@ -729,14 +810,37 @@ int main(int argc, char **argv) {
     return 12;
   }
 
-  for (int I = Start; I < End; I++) {
-    InputGenRTTy LocalInputGenRT(argv[0], OutputDir, FuncIdent.c_str(),
-                                 StackPtr, I);
-    InputGenRT = &LocalInputGenRT;
-    EntryFn(argc, argv);
-  }
+  int I = Start;
+  if (Start + 1 != End)
+    return 1;
 
-  dlclose(Handle);
+  bool EnablePtrCmpRetry = getenv("INPUT_GEN_PTR_CMP_RETRY");
+
+  std::function<void()> RunInputGen;
+  std::function<void(ObjCmpInfoTy)> CmpInfoCallback;
+
+  RunInputGen = [&]() {
+    InputGenRT = new InputGenRTTy(
+        argv[0], OutputDir, FuncIdent.c_str(), StackPtr, I, ObjCmps,
+        EnablePtrCmpRetry ? &CmpInfoCallback : nullptr);
+    EntryFn(argc, argv);
+    InputGenRT->report();
+    delete InputGenRT;
+
+    dlclose(Handle);
+    exit(0);
+  };
+
+  CmpInfoCallback = [&](ObjCmpInfoTy ObjCmp) {
+    ObjCmps.push_back(ObjCmp);
+
+    INPUTGEN_DEBUG(std::cerr << "Retrying..." << std::endl);
+
+    delete InputGenRT;
+    RunInputGen();
+  };
+
+  RunInputGen();
 
   return 0;
 }

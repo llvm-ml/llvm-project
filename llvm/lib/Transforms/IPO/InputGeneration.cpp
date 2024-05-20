@@ -304,6 +304,16 @@ InputGenInstrumenter::isInterestingMemoryAccess(Instruction *I) const {
   return Access;
 }
 
+void InputGenInstrumenter::instrumentCmp(ICmpInst *Cmp) {
+  Type *Ty = Cmp->getOperand(0)->getType();
+  if (!Ty->isPointerTy())
+    return;
+
+  IRBuilder<> IRB(Cmp);
+  IRB.CreateCall(CmpPtrCallback, {Cmp->getOperand(0), Cmp->getOperand(1),
+                                  IRB.getInt32(Cmp->getPredicate())});
+}
+
 void InputGenInstrumenter::instrumentMop(const InterestingMemoryAccess &Access,
                                          const DataLayout &DL) {
 
@@ -729,6 +739,8 @@ void InputGenInstrumenter::initializeCallbacks(Module &M) {
   InputGenMemset =
       M.getOrInsertFunction(Prefix + "memset", PtrTy, PtrTy, Int8Ty, Int64Ty);
   UseCallback = M.getOrInsertFunction(Prefix + "use", VoidTy, PtrTy, Int32Ty);
+  CmpPtrCallback =
+      M.getOrInsertFunction(Prefix + "cmp_ptr", PtrTy, PtrTy, PtrTy, Int32Ty);
 }
 
 void InputGenInstrumenter::stubDeclarations(Module &M, TargetLibraryInfo &TLI) {
@@ -1082,9 +1094,12 @@ void InputGenInstrumenter::instrumentFunction(Function &F) {
   SmallVector<InterestingMemoryAccess, 16> ToInstrument;
 
   // Fill the set of memory operations to instrument.
-  for (auto &I : instructions(F))
+  for (auto &I : instructions(F)) {
     if (auto IMA = isInterestingMemoryAccess(&I))
       ToInstrument.push_back(*IMA);
+    else if (auto *Cmp = dyn_cast<ICmpInst>(&I))
+      instrumentCmp(Cmp);
+  }
 
   if (ToInstrument.empty()) {
     LLVM_DEBUG(dbgs() << "INPUTGEN nothing to instrument in " << F.getName()
