@@ -73,7 +73,7 @@ RW(long double, x86_fp80)
 
 #undef RW
 
-// void free(void *) {}
+void __inputrun_use(VoidPtrTy Ptr, uint32_t Size) { useValue(Ptr, Size); }
 }
 
 int main(int argc, char **argv) {

@@ -20,10 +20,15 @@ def handle_single_module_i(i):
     language = row['language']
     return {'idx': i, 'language': language, 'stats': igm.handle_single_module((i, module), args)}
 
+def note_down_configuration():
+    return mig.note_down_configuration(args)
+
 parser = argparse.ArgumentParser('MassInputGenJug')
 mig.add_option_args(parser)
 parser.add_argument('--invalidate-instrumentation-failures', action='store_true')
 args = parser.parse_args()
+
+configuration = jug.Task(note_down_configuration)
 
 if not args.get_jug_results:
 

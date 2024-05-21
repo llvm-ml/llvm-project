@@ -102,4 +102,10 @@ static std::string getFunctionNameFromFile(std::string FileName,
   return OriginalFuncName;
 }
 
+static void useValue(VoidPtrTy Ptr, uint32_t Size) {
+  if (getenv("___INPUT_GEN_USE___"))
+    for (unsigned I = 0; I < Size; I++)
+      printf("%c\n", *(Ptr + Size));
+}
+
 #endif // _INPUT_GEN_RUNTIMES_RT_H_

@@ -9,6 +9,7 @@ import multiprocessing
 import functools
 from datasets import load_dataset
 import jug
+import copy
 
 import input_gen_module as igm
 
@@ -68,9 +69,9 @@ def pretty_print_statistics(results):
     print('}')
 
 def aggregate_statistics(stats):
-    empty = igm.InputGenModule().get_empty_statistics()
+    empty = igm.get_empty_statistics()
     agg_stats = functools.reduce(
-        igm.InputGenModule().add_statistics, stats, empty)
+        igm.add_statistics, stats, empty)
     return agg_stats
 
 def handle_single_module_i(i):
@@ -79,6 +80,24 @@ def handle_single_module_i(i):
     module = row['content']
     language = row['language']
     return {'idx': i, 'language': language, 'stats': igm.handle_single_module((i, module), args)}
+
+def note_down_configuration(args):
+    conf = {}
+    env = os.environ.copy()
+
+    env_vars_to_note_down = ['INPUT_GEN_PTR_CMP_RETRY']
+
+    conf['env'] = {}
+    for var in env_vars_to_note_down:
+        if var in env:
+            conf['env'][var] = env[var]
+        else:
+            conf['env'][var] = None
+    script_dir = os.path.dirname(os.path.realpath(__file__))
+    conf['script_version'] = subprocess.check_output(['git', 'rev-parse', '--short', 'HEAD'], cwd=script_dir).decode('ascii').strip()
+    conf['input_gen_version'] = subprocess.check_output(['input-gen', '--version']).decode('ascii')
+    conf['args'] = copy.deepcopy(args)
+    return conf
 
 def add_option_args(parser):
     parser.add_argument('--dataset', default='llvm-ml/ComPile')

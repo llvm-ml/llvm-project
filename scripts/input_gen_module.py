@@ -7,8 +7,9 @@ import os
 import sys
 import time
 import json
-import shutil
 import copy
+import json
+from itertools import zip_longest
 
 def add_option_args(parser):
     parser.add_argument('--input-gen-num', type=int, default=1)
@@ -23,9 +24,11 @@ def add_option_args(parser):
     parser.add_argument('-g', action='store_true')
     parser.set_defaults(verbose=False)
     parser.add_argument('--cleanup', action='store_true')
+    parser.add_argument('--coverage-statistics', action='store_true')
+    parser.add_argument('--coverage-runtime')
 
 class Function:
-    def __init__(self, name, ident, verbose):
+    def __init__(self, name, ident, verbose, coverage_statistics):
         self.name = name
         self.ident = ident
         self.verbose = verbose
@@ -36,6 +39,8 @@ class Function:
         self.succeeded_seeds = []
         self.inputs = []
         self.times = {}
+        self.coverage_statistics = coverage_statistics
+        self.profile_files = {}
 
     def get_stderr(self):
         if self.verbose:
@@ -69,10 +74,17 @@ class Function:
                     available_functions_file_name,
                     self.ident,
                 ]
+            if self.coverage_statistics:
+                env = os.environ.copy()
+                profdatafile = os.path.join(self.inputs_dir, inpt + '.profdata')
+                env['LLVM_PROFILE_FILE'] = profdatafile
+            else:
+                env = None
             proc = subprocess.Popen(
                 igrunargs,
                 stdout=self.get_stdout(),
-                stderr=self.get_stderr())
+                stderr=self.get_stderr(),
+                env=env)
 
             self.print('ig args run:', ' '.join(igrunargs))
             out, err = proc.communicate(timeout=timeout)
@@ -83,6 +95,8 @@ class Function:
             if proc.returncode != 0:
                 self.print('Input run process failed (%i): %s' % (proc.returncode, inpt))
             else:
+                if self.coverage_statistics:
+                    self.profile_files[inpt] = profdatafile
                 if inpt not in self.times:
                     self.times[inpt] = []
                 self.times[inpt].append(elapsed_time)
@@ -100,11 +114,45 @@ class Function:
                 proc.communicate()
                 self.print("Killed.")
 
+def my_add(a, b):
+    if a is None:
+        return b
+    if b is None:
+        return a
+    return a + b
+
+def aggregate_statistics(stats, to_add):
+    for k, v in stats.items():
+        if isinstance(to_add[k], list):
+            stats[k] = [my_add(a, b) for a, b in zip_longest(to_add[k], stats[k])]
+        elif to_add[k] is not None:
+            stats[k] = my_add(stats[k], to_add[k])
+
+def add_statistics(a, b):
+    c = get_empty_statistics()
+    aggregate_statistics(c, a)
+    aggregate_statistics(c, b)
+    return c
+
+def get_empty_statistics():
+    stats = {
+        'num_funcs': 0,
+        'num_instrumented_funcs': 0,
+        'num_input_generated_funcs': 0,
+        'num_input_ran_funcs': 0,
+        'num_bbs': None,
+        'num_bbs_executed': [],
+    }
+    return stats
+
 class InputGenModule:
     def __init__(self, **kwargs):
         for k, v in kwargs.items():
             setattr(self, k, v)
         self.functions = []
+
+        if kwargs['coverage_statistics'] and not kwargs['coverage_runtime']:
+            self.print_err('Must specify coverage runtime when requesting coverage statistics')
 
     def print(self, *args, **kwargs):
         if self.verbose:
@@ -128,7 +176,7 @@ class InputGenModule:
     def generate_inputs(self):
 
         if self.cleanup:
-            self.tempdir = tempfile.TemporaryDirectory()
+            self.tempdir = tempfile.TemporaryDirectory(dir=self.outdir)
             self.outdir = self.tempdir.name
 
         try:
@@ -159,10 +207,15 @@ class InputGenModule:
                 '--input-run-runtime', self.input_run_runtime,
                 '--output-dir', self.outdir,
                 self.input_module,
-                '--compile-input-gen-executables'
+                '--compile-input-gen-executables',
             ]
             if self.g:
                 igargs.append('-g')
+            if self.coverage_statistics:
+                igargs.append('--instrumented-module-for-coverage')
+                igargs.append('--profiling-runtime-path')
+                igargs.append(self.coverage_runtime)
+
             self.print("input-gen args:", " ".join(igargs))
             subprocess.run(igargs,
                            check=True,
@@ -184,7 +237,7 @@ class InputGenModule:
             fids = zerosplit[0:-1:2]
             fnames = zerosplit[1::2]
             for (fid, fname) in zip(fids, fnames, strict=True):
-                func = Function(fname, fid, self.verbose)
+                func = Function(fname, fid, self.verbose, self.coverage_statistics)
                 self.functions.append(func)
 
                 if instrumentation_failed:
@@ -288,21 +341,61 @@ class InputGenModule:
         for func in self.functions:
             func.run_all_inputs(self.input_run_timeout, self.available_functions_file_name)
 
-    def get_empty_statistics(self):
-        stats = {
-            'num_funcs': 0,
-            'num_instrumented_funcs': 0,
-            'num_input_generated_funcs': 0,
-            'num_input_ran_funcs': 0,
-        }
-        return stats
-
     def get_statistics(self):
-        stats = self.get_empty_statistics()
+        stats = get_empty_statistics()
         self.update_statistics(stats)
         return stats
 
+    def merge_profdata(self, outfile, infile):
+        try:
+            merge_args = [
+                'llvm-profdata', 'merge',
+                '-o', outfile,
+                outfile, infile,
+            ]
+            subprocess.run(merge_args,
+                            check=True,
+                            stdout=self.get_stdout(),
+                            stderr=self.get_stderr())
+        except:
+            self.print('Failed to merge profdata')
+            self.print(" ".join(merge_args))
+
     def update_statistics(self, stats):
+        with tempfile.NamedTemporaryFile() as temp_profdata:
+            for i in range(self.input_gen_num):
+                for func in self.functions:
+                    if i < len(func.profile_files):
+                        self.merge_profdata(temp_profdata.name, list(func.profile_files.values())[i])
+
+                mbb_dict = None
+                try:
+                    mbb_args = [
+                        'mbb-pgo-info',
+                        '--bc-path', self.input_module,
+                        '--profile-path', temp_profdata.name,
+                    ]
+                    mbb = subprocess.Popen(mbb_args,
+                                   stdout=subprocess.PIPE,
+                                   stderr=self.get_stderr())
+                    mbb_json = mbb.stdout.read()
+                    mbb_dict = json.loads(mbb_json)
+                except:
+                    self.print('Failed to merge profdata')
+                    self.print(" ".join(mbb_args))
+
+                if mbb_dict is not None:
+                    num_bbs = 0
+                    num_bbs_executed = 0
+
+                    for func in mbb_dict['Functions']:
+                        for _, bbs in func.items():
+                            num_bbs += bbs['NumBlocks']
+                            num_bbs_executed += bbs['NumBlocksExecuted']
+                    assert(stats['num_bbs'] is None or stats['num_bbs'] == num_bbs)
+                    stats['num_bbs'] = max(num_bbs, stats['num_bbs']) if stats['num_bbs'] is not None else num_bbs
+                    stats['num_bbs_executed'].append(num_bbs_executed)
+
         for func in self.functions:
             stats['num_funcs'] += 1
             if func.input_gen_executable:
@@ -311,16 +404,6 @@ class InputGenModule:
                 stats['num_input_generated_funcs'] += 1
             if len(func.times) != 0:
                 stats['num_input_ran_funcs'] += 1
-
-    def aggregate_statistics(self, stats, to_add):
-        for k, v in stats.items():
-            stats[k] += to_add[k]
-
-    def add_statistics(self, a, b):
-        c = self.get_empty_statistics()
-        self.aggregate_statistics(c, a)
-        self.aggregate_statistics(c, b)
-        return c
 
 def handle_single_module(task, args):
     (i, module) = task
@@ -337,15 +420,18 @@ def handle_single_module(task, args):
     igm = InputGenModule(**igm_args)
     igm.generate_inputs()
     igm.run_all_inputs()
-    igm.cleanup_outdir()
 
+    statistics = igm.get_statistics()
+
+    igm.cleanup_outdir()
     if args.cleanup:
         try:
+            os.remove(igm_args['input_module'])
             os.rmdir(igm_args['outdir'])
-        except:
+        except Exception as e:
             pass
 
-    return igm.get_statistics()
+    return statistics
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('InputGenModule')

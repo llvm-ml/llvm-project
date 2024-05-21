@@ -39,22 +39,38 @@ if [ "$NOCLEANUP" == "" ]; then
     ADDITIONAL_FLAGS="$ADDITIONAL_FLAGS --cleanup"
 fi
 
-. "$SCRIPT_DIR/enable.sh" "/usr/WS1/$USER/opt/input-gen-release"
-export PYTHONPATH="$PYTHONPATH:$SCRIPT_DIR"
+### Default values. These can be overridden in the user config file below
+DATASET="/p/vast1/LExperts/ComPile-Public-V2"
+OUTDIR="/l/ssd/$USER/compile-input-gen-out/"
+LLVM_INSTALL_DIR="/usr/WS1/$USER/opt/input-gen-release"
+### Default values
+
+# User provided configuration
+USER_CONFIG="$SCRIPT_DIR/configuration.sh"
+if [ -f "$USER_CONFIG" ]; then
+    . "$USER_CONFIG"
+fi
+
+. "$SCRIPT_DIR/enable.sh" "$LLVM_INSTALL_DIR"
+PYTHONPATH="$PYTHONPATH:$SCRIPT_DIR"
 
 function run() {
     $JUG_RUN "$SCRIPT" $DASHDASH \
-        --dataset "/p/vast1/LExperts/ComPile-Public" \
-        --outdir "/l/ssd/$USER/compile-input-gen-out/" \
+        --dataset "$DATASET" \
+        --outdir "$OUTDIR" \
         --start "$START" \
         --end "$END" \
         --precompile-rts \
         --input-gen-runtime "$(readlink -f "$SCRIPT_DIR/../input-gen-runtimes/rt-input-gen.cpp")" \
         --input-run-runtime "$(readlink -f "$SCRIPT_DIR/../input-gen-runtimes/rt-run.cpp")" \
-        --input-gen-num 1 \
+        --input-gen-num 5 \
         --input-gen-num-retries 5 \
         --input-gen-timeout 5 \
         --input-run-timeout 5 \
-        --num-procs="$NUM_CPU" $ADDITIONAL_FLAGS
+        --num-procs="$NUM_CPU" \
+        --coverage-statistics \
+        --coverage-runtime "$(readlink -f "$LLVM_INSTALL_DIR/lib/clang/19/lib/x86_64-unknown-linux-gnu/libclang_rt.profile.a")" \
+        $ADDITIONAL_FLAGS
+
 }
 run

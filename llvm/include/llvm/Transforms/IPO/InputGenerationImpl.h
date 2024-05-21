@@ -75,8 +75,9 @@ struct InterestingMemoryAccess {
 class InputGenInstrumenter {
 public:
   InputGenInstrumenter(Module &M, AnalysisManager<Module> &MAM,
-                       IGInstrumentationModeTy Mode)
-      : Mode(Mode), MAM(MAM) {
+                       IGInstrumentationModeTy Mode,
+                       bool InstrumentedForCoverage)
+      : Mode(Mode), MAM(MAM), InstrumentedForCoverage(InstrumentedForCoverage) {
     Ctx = &(M.getContext());
     PtrTy = PointerType::getUnqual(*Ctx);
     Int1Ty = IntegerType::getIntNTy(*Ctx, 1);
@@ -136,24 +137,34 @@ public:
 
   void initializeCallbacks(Module &M);
 
+  bool shouldPreserveFuncName(Function &F, TargetLibraryInfo &TLI);
+  bool shouldNotStubFunc(Function &F, TargetLibraryInfo &TLI);
+  bool shouldPreserveGVName(GlobalVariable &GV);
+  bool shouldNotStubGV(GlobalVariable &GV);
+
 private:
   CallbackCollectionTy InputGenMemoryAccessCallback;
   CallbackCollectionTy StubValueGenCallback;
   CallbackCollectionTy ArgGenCallback;
 
   FunctionCallee InputGenMemmove, InputGenMemcpy, InputGenMemset;
+  FunctionCallee UseCallback;
+
+  bool InstrumentedForCoverage;
 };
 
 class ModuleInputGenInstrumenter {
 public:
   ModuleInputGenInstrumenter(Module &M, AnalysisManager<Module> &AM,
-                             IGInstrumentationModeTy Mode)
-      : IGI(M, AM, Mode) {
+                             IGInstrumentationModeTy Mode,
+                             bool InstrumentedForCoverage)
+      : IGI(M, AM, Mode, InstrumentedForCoverage) {
     TargetTriple = Triple(M.getTargetTriple());
     TLII.reset(new TargetLibraryInfoImpl(TargetTriple));
     TLI.reset(new TargetLibraryInfo(*TLII));
   }
 
+  void renameGlobals(Module &M, TargetLibraryInfo &TLI);
   bool instrumentClEntryPoint(Module &);
   bool instrumentModule(Module &);
   bool instrumentEntryPoint(Module &, Function &, bool);

@@ -5,7 +5,6 @@ import sys
 import os
 import functools
 jf = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'jugfile.py')
-print(jf, jf[:-3] + '.jugdata/')
 jug.init(jf, jf[:-3] + '.jugdata/')
 import mass_input_gen as mig
 import jugfile
@@ -21,4 +20,11 @@ if jugfile.args.invalidate_instrumentation_failures:
     sys.exit(0)
 
 stats = jug.task.value(tasks)
+config = jug.task.value(jugfile.configuration)
+print('{')
+print('"Config":')
+print(config, end=',')
+print()
+print('"Results":')
 mig.pretty_print_statistics(stats)
+print('}')

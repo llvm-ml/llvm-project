@@ -3,3 +3,4 @@
 *.log
 tmp/
 *.jugdata
+configuration.sh

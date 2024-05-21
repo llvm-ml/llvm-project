@@ -671,8 +671,7 @@ ARG(__int128, i128)
 ARG(long double, x86_fp80)
 #undef ARG
 
-// TODO Need to rename this when instrumenting
-// void free(void *) {}
+void __inputgen_use(VoidPtrTy Ptr, uint32_t Size) { useValue(Ptr, Size); }
 }
 
 int main(int argc, char **argv) {

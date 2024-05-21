@@ -3,7 +3,6 @@
 ; RUN: %S/run_all.sh %t
 ; RUN: llvm-profdata merge %t/i64.profraw %t/0.profraw -o %t/coverage.prof
 ; RUN: mbb-pgo-info --bc-path=%s --profile-path=%t/coverage.prof | FileCheck %s
-; RUN: echo %libclang_rt_profile > /tmp/test2.txt
 
 ; CHECK: "NumBlocksExecuted": 1
 
