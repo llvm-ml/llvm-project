@@ -366,6 +366,8 @@ public:
         Args.push_back("-O0");
       } else {
         Args.push_back("-O3");
+        Args.push_back("-flto");
+        Args.push_back("-fuse-ld=lld");
         Args.push_back("-DNDEBUG");
       }
       std::string ErrMsg;

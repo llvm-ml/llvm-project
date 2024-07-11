@@ -34,8 +34,9 @@ namespace {
 int VERBOSE = 0;
 int TIMING = 0;
 
-INPUTGEN_TIMER_DEFINE(IGInitialization);
-INPUTGEN_TIMER_DEFINE(IGGen);
+INPUTGEN_TIMER_DEFINE(IGLastGen);
+INPUTGEN_TIMER_DEFINE(IGGenAll);
+INPUTGEN_TIMER_DEFINE(IGLastGenAndInit);
 INPUTGEN_TIMER_DEFINE(IGDump);
 } // namespace
 
@@ -376,7 +377,7 @@ struct RetryInfoTy {
   virtual void dump(std::ostream &Stream) const {
     Stream << "RL " << RollbackLocation << " ";
   }
-  virtual ~RetryInfoTy() {};
+  virtual ~RetryInfoTy(){};
 };
 struct ObjCmpOffsetTy : RetryInfoTy {
   size_t IdxOriginal, IdxOther;
@@ -1315,8 +1316,6 @@ int main(int argc, char **argv) {
   std::cout << "Will generate " << Size << " inputs for function " << FuncName
             << " " << FuncIdent << std::endl;
 
-  INPUTGEN_TIMER_START(IGInitialization);
-
   DynLibHandle = dlopen(NULL, RTLD_NOW);
   if (!DynLibHandle) {
     std::cout << "Could not dyn load binary" << std::endl;
@@ -1338,11 +1337,14 @@ int main(int argc, char **argv) {
 
   InputGenConfTy InputGenConf;
 
+  INPUTGEN_TIMER_START(IGGenAll);
   std::function<void()> RunInputGen;
   std::function<void(std::unique_ptr<RetryInfoTy>)> CmpInfoCallback;
 
   std::atexit([]() {
-    INPUTGEN_TIMER_END(IGGen);
+    INPUTGEN_TIMER_END(IGLastGen);
+    INPUTGEN_TIMER_END(IGLastGenAndInit);
+    INPUTGEN_TIMER_END(IGGenAll);
 
     if (InputGenRT) {
       INPUTGEN_TIMER_START(IGDump);
@@ -1356,11 +1358,11 @@ int main(int argc, char **argv) {
   });
 
   RunInputGen = [&]() {
+    INPUTGEN_TIMER_START(IGLastGenAndInit);
     InputGenRT =
         new InputGenRTTy(argv[0], OutputDir, FuncIdent.c_str(), StackPtr, I,
                          InputGenConf, RetryInfos, &CmpInfoCallback);
-    INPUTGEN_TIMER_END(IGInitialization);
-    INPUTGEN_TIMER_START(IGGen);
+    INPUTGEN_TIMER_START(IGLastGen);
     EntryFn(argc, argv);
     exit(0);
   };
