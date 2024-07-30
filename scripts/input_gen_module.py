@@ -10,6 +10,7 @@ import time
 import json
 import copy
 import json
+import shutil
 from itertools import zip_longest
 
 UNREACHABLE_EXIT_STATUS = 111
@@ -588,6 +589,11 @@ def handle_single_module(task, args):
     return statistics
 
 def main():
+
+    if shutil.which("input-gen") is None:
+        print('input-gen executable not found')
+        exit(1)
+
     parser = argparse.ArgumentParser('MassInputGen')
     add_option_args(parser)
     parser.add_argument('--outdir', required=True)
@@ -599,7 +605,7 @@ def main():
 
     try:
         statistics = igm.get_statistics()
-        print("statistics")
+        print(f'statistics: {statistics}')
     except Exception as e:
         raise e
 
