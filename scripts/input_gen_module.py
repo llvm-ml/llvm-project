@@ -136,7 +136,7 @@ class Function:
         if not succeeded:
             profdatafile = None
             unreachable_exit = None
-            times = []
+            times = None
         self.run_times.append(times)
         self.unreachable_exit_times.append(unreachable_exit)
         if self.generate_profs:
@@ -499,7 +499,7 @@ class InputGenModule:
                     generated_funcs.add(func.ident)
                     if not func.unreachable_exit_inputs[i]:
                         generated_funcs_nu.add(func.ident)
-                if func.run_times[i]:
+                if func.run_times[i] is not None:
                     ran_funcs.add(func.ident)
                     if not func.unreachable_exit_times[i]:
                         ran_funcs_nu.add(func.ident)
