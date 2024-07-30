@@ -1,5 +1,19 @@
 # Input-gen useful commands
 
+``` sh
+$ ./scripts/input_gen_module.py --help
+```
+
+To generate 5 inputs for `func_name` in `module.bc`:
+``` sh
+$ ./scripts/input_gen_module.py [--verbose] --function func_name --outdir ./outdir --input-module module.bc
+```
+
+To generate 5 inputs for all available functions in `module.bc`:
+``` sh
+$ ./scripts/input_gen_module.py [--verbose] --outdir ./outdir --input-module module.bc --input-gen-num 5
+```
+
 ## Mass input gen
 
 To generate inputs:
