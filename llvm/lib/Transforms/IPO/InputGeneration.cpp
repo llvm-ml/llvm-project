@@ -226,8 +226,8 @@ InputGenerationInstrumentPass::InputGenerationInstrumentPass() = default;
 
 PreservedAnalyses
 InputGenerationInstrumentPass::run(Module &M, AnalysisManager<Module> &MAM) {
-  ModuleInputGenInstrumenter Profiler(M, MAM, ClInstrumentationMode, true);
-  if (Profiler.instrumentClEntryPoint(M))
+  ModuleInputGenInstrumenter MIGI(M, MAM, ClInstrumentationMode, true);
+  if (MIGI.instrumentClEntryPoint(M))
     return PreservedAnalyses::none();
   return PreservedAnalyses::all();
 }
@@ -787,32 +787,6 @@ bool ModuleInputGenInstrumenter::instrumentEntryPoint(Module &M,
   return true;
 }
 
-std::unique_ptr<Module>
-ModuleInputGenInstrumenter::generateEntryPointModule(Module &M,
-                                                     Function &EntryPoint) {
-  auto NewM = std::make_unique<Module>("entry_point_module", M.getContext());
-  NewM->setTargetTriple(M.getTargetTriple());
-  NewM->setDataLayout(M.getDataLayout());
-
-  Function *EntryF = Function::Create(EntryPoint.getFunctionType(),
-                                      GlobalValue::ExternalLinkage,
-                                      EntryPoint.getName(), &*NewM);
-
-  switch (IGI.Mode) {
-  case IG_Record:
-    IGI.createRecordingEntryPoint(*EntryF);
-    break;
-  case IG_Generate:
-    IGI.createGenerationEntryPoint(*EntryF, true);
-    break;
-  case IG_Run:
-    IGI.createRunEntryPoint(*EntryF, true);
-    break;
-  }
-
-  return NewM;
-}
-
 bool ModuleInputGenInstrumenter::instrumentModuleForFunction(
     Module &M, Function &EntryPoint) {
   if (EntryPoint.isDeclaration()) {
@@ -821,10 +795,19 @@ bool ModuleInputGenInstrumenter::instrumentModuleForFunction(
     return false;
   }
 
-  IGI.pruneModule(EntryPoint);
-  instrumentModule(M);
-  instrumentEntryPoint(M, EntryPoint, /*UniqName=*/false);
-  instrumentFunctionPtrs(M);
+  switch (IGI.Mode) {
+  case IG_Generate:
+  case IG_Run:
+    IGI.pruneModule(EntryPoint);
+    instrumentModule(M);
+    instrumentEntryPoint(M, EntryPoint, /*UniqName=*/false);
+    instrumentFunctionPtrs(M);
+    break;
+  case IG_Record:
+    instrumentModule(M);
+    instrumentEntryPoint(M, EntryPoint, /*UniqName=*/false);
+    break;
+  }
 
   return true;
 }
@@ -1495,18 +1478,18 @@ void InputGenInstrumenter::createRecordingEntryPoint(Function &F) {
   IRB.SetCurrentDebugLocation(F.getEntryBlock().getTerminator()->getDebugLoc());
 
   FunctionCallee PushFn = M.getOrInsertFunction(
-      RecordingCallbackPrefix + "push", FunctionType::get(VoidTy, false));
+      getCallbackPrefix(Mode) + "push", FunctionType::get(VoidTy, false));
   IRB.CreateCall(PushFn, {});
 
   for (auto &Arg : F.args()) {
     FunctionCallee ArgPtrFn = M.getOrInsertFunction(
-        RecordingCallbackPrefix + "arg_" + ::getTypeName(Arg.getType()),
+        getCallbackPrefix(Mode) + "arg_" + ::getTypeName(Arg.getType()),
         FunctionType::get(Arg.getType(), {Arg.getType()}, false));
     IRB.CreateCall(ArgPtrFn, {&Arg});
   }
 
   FunctionCallee PopFn = M.getOrInsertFunction(
-      RecordingCallbackPrefix + "pop", FunctionType::get(VoidTy, false));
+      getCallbackPrefix(Mode) + "pop", FunctionType::get(VoidTy, false));
   for (auto &I : instructions(F)) {
     if (!isa<ReturnInst>(I))
       continue;

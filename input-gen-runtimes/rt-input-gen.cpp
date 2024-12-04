@@ -26,14 +26,9 @@
 #include <unordered_map>
 #include <vector>
 
-#include "rt.hpp"
-
-#include "../llvm/include/llvm/Transforms/IPO/InputGenerationTypes.h"
+#include "rt-common.hpp"
 
 namespace {
-int VERBOSE = 0;
-int TIMING = 0;
-
 INPUTGEN_TIMER_DEFINE(IGLastGen);
 INPUTGEN_TIMER_DEFINE(IGGenAll);
 INPUTGEN_TIMER_DEFINE(IGLastGenAndInit);
@@ -44,13 +39,6 @@ extern "C" {
 extern VoidPtrTy __inputgen_function_pointers[];
 extern uint32_t __inputgen_num_function_pointers;
 }
-
-using BranchHint = llvm::inputgen::BranchHint;
-
-static constexpr intptr_t MinObjAllocation = 64;
-static constexpr unsigned NullPtrProbability = 75;
-static constexpr int CmpPtrRetryProbability = 10;
-static constexpr int MaxDeviationFromBranchHint = 10;
 
 template <typename T>
 static void dumpBranchHints(BranchHint *BHs, int32_t BHSize) {
@@ -67,296 +55,6 @@ static void dumpBranchHints(BranchHint *BHs, int32_t BHSize) {
       std::cerr << "Val " << *reinterpret_cast<T *>(BH.Val) << std::endl;
   }
 }
-
-template <typename T> static T divFloor(T A, T B) {
-  assert(B > 0);
-  T Res = A / B;
-  T Rem = A % B;
-  if (Rem == 0)
-    return Res;
-  if (Rem < 0) {
-    assert(A < 0);
-    return Res - 1;
-  }
-  assert(A > 0);
-  return Res;
-}
-
-template <typename T> static T divCeil(T A, T B) {
-  assert(B > 0);
-  T Res = A / B;
-  T Rem = A % B;
-  if (Rem == 0)
-    return Res;
-  if (Rem > 0) {
-    assert(A > 0);
-    return Res + 1;
-  }
-  assert(A < 0);
-  return Res;
-}
-
-template <typename T> static T alignStart(T Ptr, intptr_t Alignment) {
-  intptr_t IPtr = reinterpret_cast<intptr_t>(Ptr);
-  return reinterpret_cast<T>(divFloor(IPtr, Alignment) * Alignment);
-}
-
-template <typename T> static T alignEnd(T Ptr, intptr_t Alignment) {
-  intptr_t IPtr = reinterpret_cast<intptr_t>(Ptr);
-  return reinterpret_cast<T>(divCeil(IPtr, Alignment) * Alignment);
-}
-
-static VoidPtrTy advance(VoidPtrTy Ptr, uint64_t Bytes) {
-  return reinterpret_cast<uint8_t *>(Ptr) + Bytes;
-}
-
-struct ObjectTy {
-  const ObjectAddressing &OA;
-  ObjectTy(size_t Idx, const ObjectAddressing &OA, VoidPtrTy Output,
-           bool KnownSizeObjBundle = false)
-      : OA(OA), KnownSizeObjBundle(KnownSizeObjBundle), Idx(Idx) {
-    this->Output.Memory = Output;
-    this->Output.AllocationSize = OA.MaxObjectSize;
-    this->Output.AllocationOffset = OA.getOffsetFromObjBasePtr(nullptr);
-
-    if (KnownSizeObjBundle)
-      CurrentStaticObjEnd = OA.getObjBasePtr();
-  }
-  ~ObjectTy() {}
-
-  struct AlignedMemoryChunk {
-    VoidPtrTy Ptr;
-    intptr_t InputSize;
-    intptr_t InputOffset;
-    intptr_t OutputSize;
-    intptr_t OutputOffset;
-    intptr_t CmpSize;
-    intptr_t CmpOffset;
-  };
-
-  bool KnownSizeObjBundle;
-  VoidPtrTy CurrentStaticObjEnd;
-
-  VoidPtrTy addKnownSizeObject(uintptr_t Size) {
-    assert(KnownSizeObjBundle);
-    // Make sure zero-sized objects have their own address
-    if (Size == 0)
-      Size = 1;
-    if (Size + CurrentStaticObjEnd > OA.getLowestObjPtr() + OA.MaxObjectSize)
-      return nullptr;
-    VoidPtrTy ObjPtr = CurrentStaticObjEnd;
-    CurrentStaticObjEnd = alignEnd(CurrentStaticObjEnd + Size, ObjAlignment);
-    return ObjPtr;
-  }
-
-  struct KnownSizeObjInputMem {
-    VoidPtrTy Start;
-    uintptr_t Size;
-  };
-  KnownSizeObjInputMem getKnownSizeObjectInputMemory(VoidPtrTy LocalPtr,
-                                                     uintptr_t Size) {
-    assert(KnownSizeObjBundle);
-    KnownSizeObjInputMem Mem;
-    Mem.Start = std::min(
-        LocalPtr + Size,
-        std::max(LocalPtr, OA.getObjBasePtr() + InputLimits.LowestOffset));
-    VoidPtrTy End = std::max(
-        LocalPtr, std::min(LocalPtr + Size,
-                           OA.getObjBasePtr() + InputLimits.HighestOffset));
-    Mem.Size = End - Mem.Start;
-    assert(Mem.Start <= End);
-    return Mem;
-  }
-
-  void comparedAt(VoidPtrTy Ptr) {
-    intptr_t Offset = OA.getOffsetFromObjBasePtr(Ptr);
-    CmpLimits.update(Offset, 1);
-  }
-
-  AlignedMemoryChunk getAlignedInputMemory() {
-    // If we compare the pointer at some offset we need to make sure the output
-    // allocation will contain those locations, otherwise comparisons may differ
-    // in input-gen and input-run as we would compare against an offset in a
-    // different object
-    if (!OutputLimits.isEmpty()) {
-      if (!CmpLimits.isEmpty())
-        OutputLimits.update(CmpLimits.LowestOffset, CmpLimits.getSize());
-      // We no longer need the CmpLimits, reset it
-      CmpLimits = Limits();
-    }
-
-    VoidPtrTy InputStart =
-        InputLimits.LowestOffset + Input.Memory - Input.AllocationOffset;
-    VoidPtrTy InputEnd =
-        InputLimits.HighestOffset + Input.Memory - Input.AllocationOffset;
-    intptr_t OutputStart = alignStart(OutputLimits.LowestOffset, ObjAlignment);
-    intptr_t OutputEnd = alignEnd(OutputLimits.HighestOffset, ObjAlignment);
-    return {InputStart,
-            InputEnd - InputStart,
-            InputLimits.LowestOffset,
-            OutputEnd - OutputStart,
-            OutputStart,
-            CmpLimits.getSize(),
-            CmpLimits.LowestOffset};
-  }
-
-  template <typename T>
-  T read(VoidPtrTy Ptr, uint32_t Size, BranchHint *BHs, int32_t BHSize);
-
-  template <typename T> void write(T Val, VoidPtrTy Ptr, uint32_t Size) {
-    intptr_t Offset = OA.getOffsetFromObjBasePtr(Ptr);
-    assert(Output.isAllocated(Offset, Size));
-    Used.ensureAllocation(Offset, Size);
-    markUsed(Offset, Size);
-    OutputLimits.update(Offset, Size);
-  }
-
-  void setFunctionPtrIdx(VoidPtrTy Ptr, uint32_t Size, VoidPtrTy FPtr,
-                         uint32_t FIdx) {
-    intptr_t Offset = OA.getOffsetFromObjBasePtr(Ptr);
-    storeGeneratedValue(FPtr, Offset, Size);
-    FPtrs.insert({Offset, FIdx});
-  }
-
-  const size_t Idx;
-  std::set<intptr_t> Ptrs;
-  std::unordered_map<intptr_t, uint32_t> FPtrs;
-
-private:
-  struct Memory {
-    VoidPtrTy Memory = nullptr;
-    intptr_t AllocationSize = 0;
-    intptr_t AllocationOffset = 0;
-    bool isAllocated(intptr_t Offset, uint32_t Size) {
-      intptr_t AllocatedMemoryStartOffset = AllocationOffset;
-      intptr_t AllocatedMemoryEndOffset =
-          AllocatedMemoryStartOffset + AllocationSize;
-      return (AllocatedMemoryStartOffset <= Offset &&
-              AllocatedMemoryEndOffset > Offset + Size);
-    }
-
-    /// Returns true if it was already allocated
-    bool ensureAllocation(intptr_t Offset, uint32_t Size) {
-      if (isAllocated(Offset, Size))
-        return true;
-      reallocateData(Offset, Size);
-      return false;
-    }
-
-    template <typename T>
-    void extendMemory(T *&OldMemory, intptr_t NewAllocationSize,
-                      intptr_t NewAllocationOffset) {
-      T *NewMemory = reinterpret_cast<T *>(calloc(NewAllocationSize, 1));
-      memcpy(advance(NewMemory, AllocationOffset - NewAllocationOffset),
-             OldMemory, AllocationSize);
-      free(OldMemory);
-      OldMemory = NewMemory;
-    };
-
-    /// Reallocates the data so as to make the memory at `Offset` with length
-    /// `Size` available
-    void reallocateData(intptr_t Offset, uint32_t Size) {
-      assert(!isAllocated(Offset, Size));
-
-      intptr_t AllocatedMemoryStartOffset = AllocationOffset;
-      intptr_t AllocatedMemoryEndOffset =
-          AllocatedMemoryStartOffset + AllocationSize;
-      intptr_t NewAllocatedMemoryStartOffset = AllocatedMemoryStartOffset;
-      intptr_t NewAllocatedMemoryEndOffset = AllocatedMemoryEndOffset;
-
-      intptr_t AccessStartOffset = Offset;
-      intptr_t AccessEndOffset = AccessStartOffset + Size;
-
-      if (AccessStartOffset < AllocatedMemoryStartOffset) {
-        // Extend the allocation in the negative direction
-        NewAllocatedMemoryStartOffset = alignStart(
-            std::min(2 * AccessStartOffset, -MinObjAllocation), ObjAlignment);
-      }
-      if (AccessEndOffset >= AllocatedMemoryEndOffset) {
-        // Extend the allocation in the positive direction
-        NewAllocatedMemoryEndOffset = alignEnd(
-            std::max(2 * AccessEndOffset, MinObjAllocation), ObjAlignment);
-      }
-
-      intptr_t NewAllocationOffset = NewAllocatedMemoryStartOffset;
-      intptr_t NewAllocationSize =
-          NewAllocatedMemoryEndOffset - NewAllocatedMemoryStartOffset;
-
-      INPUTGEN_DEBUG(
-          printf("Reallocating data in Object for access at %ld with size %d "
-                 "from offset "
-                 "%ld, size %ld to offset %ld, size %ld.\n",
-                 Offset, Size, AllocationOffset, AllocationSize,
-                 NewAllocationOffset, NewAllocationSize));
-
-      extendMemory(Memory, NewAllocationSize, NewAllocationOffset);
-
-      AllocationSize = NewAllocationSize;
-      AllocationOffset = NewAllocationOffset;
-    }
-  };
-  Memory Output, Input, Used;
-
-  struct Limits {
-    bool Initialized = false;
-    intptr_t LowestOffset = 0;
-    intptr_t HighestOffset = 0;
-    bool isEmpty() { return !Initialized; }
-    intptr_t getSize() { return HighestOffset - LowestOffset; }
-    void update(intptr_t Offset, uint32_t Size) {
-      if (!Initialized) {
-        Initialized = true;
-        LowestOffset = Offset;
-        HighestOffset = Offset + Size;
-        return;
-      }
-      if (LowestOffset > Offset)
-        LowestOffset = Offset;
-      if (HighestOffset < Offset + Size)
-        HighestOffset = Offset + Size;
-    }
-  };
-  Limits InputLimits, OutputLimits, CmpLimits;
-
-  bool allUsed(intptr_t Offset, uint32_t Size) {
-    for (unsigned It = 0; It < Size; It++)
-      if (!Used.isAllocated(Offset + It, 1) ||
-          !Used.Memory[Offset + It - Used.AllocationOffset])
-        return false;
-    return true;
-  }
-
-  void markUsed(intptr_t Offset, uint32_t Size) {
-    assert(Used.isAllocated(Offset, Size));
-
-    for (unsigned It = 0; It < Size; It++)
-      Used.Memory[Offset + It - Used.AllocationOffset] = 1;
-  }
-
-  template <typename T>
-  void storeGeneratedValue(T Val, intptr_t Offset, uint32_t Size) {
-    assert(Size == sizeof(Val));
-
-    // Only assign the bytes that were uninitialized
-    uint8_t Bytes[sizeof(Val)];
-    memcpy(Bytes, &Val, sizeof(Val));
-    for (unsigned It = 0; It < sizeof(Val); It++) {
-      if (!allUsed(Offset + It, 1)) {
-        VoidPtrTy OutputLoc =
-            Output.Memory - Output.AllocationOffset + Offset + It;
-        VoidPtrTy InputLoc =
-            Input.Memory - Input.AllocationOffset + Offset + It;
-        *OutputLoc = Bytes[It];
-        *InputLoc = Bytes[It];
-        markUsed(Offset + It, 1);
-      }
-    }
-
-    InputLimits.update(Offset, Size);
-    OutputLimits.update(Offset, Size);
-  }
-};
-
 struct GenValTy {
   uint8_t Content[MaxPrimitiveTypeSize] = {0};
   static_assert(sizeof(Content) == MaxPrimitiveTypeSize);
@@ -402,10 +100,10 @@ struct ObjCmpNullTy : RetryInfoTy {
   }
 };
 
-struct InputGenConfTy {
+struct InputRecordConfTy {
   bool EnablePtrCmpRetry;
   bool EnableBranchHints;
-  InputGenConfTy() {
+  InputRecordConfTy() {
     EnablePtrCmpRetry = !getenv("INPUT_GEN_DISABLE_PTR_CMP_RETRY");
     EnableBranchHints = !getenv("INPUT_GEN_DISABLE_BRANCH_HINTS");
   }
@@ -414,7 +112,7 @@ struct InputGenConfTy {
 struct InputGenRTTy {
   InputGenRTTy(const char *ExecPath, const char *OutputDir,
                const char *FuncIdent, VoidPtrTy StackPtr, int Seed,
-               InputGenConfTy InputGenConf,
+               InputRecordConfTy InputGenConf,
                std::vector<std::unique_ptr<RetryInfoTy>> &RetryInfos,
                std::function<void(std::unique_ptr<RetryInfoTy>)> *RetryCallback)
       : InputGenConf(InputGenConf), RetryCallback(RetryCallback),
@@ -454,7 +152,7 @@ struct InputGenRTTy {
   }
   ~InputGenRTTy() {}
 
-  InputGenConfTy InputGenConf;
+  InputRecordConfTy InputGenConf;
 
   std::function<void(std::unique_ptr<RetryInfoTy>)> *RetryCallback;
   std::vector<std::unique_ptr<RetryInfoTy>> &RetryInfos;
@@ -906,13 +604,12 @@ struct InputGenRTTy {
   }
 
   template <typename T>
-  T read(VoidPtrTy Ptr, VoidPtrTy Base, uint32_t Size, BranchHint *BHs,
-         int32_t BHSize) {
+  void read(VoidPtrTy Ptr, VoidPtrTy Base, uint32_t Size, BranchHint *BHs,
+            int32_t BHSize) {
     assert(Ptr);
     ObjectTy *Obj = globalPtrToObj(Ptr);
     if (Obj)
-      return Obj->read<T>(OA.globalPtrToLocalPtr(Ptr), Size, BHs, BHSize);
-    return *reinterpret_cast<T *>(Ptr);
+      Obj->read<T>(OA.globalPtrToLocalPtr(Ptr), Size, BHs, BHSize);
   }
 
   void registerGlobal(VoidPtrTy, VoidPtrTy *ReplGlobal, int32_t GlobalSize) {
@@ -1087,6 +784,7 @@ struct InputGenRTTy {
 };
 
 void *DynLibHandle = nullptr;
+
 static InputGenRTTy *InputGenRT;
 static InputGenRTTy &getInputGenRT() { return *InputGenRT; }
 
@@ -1171,87 +869,6 @@ VoidPtrTy __inputgen_memset(VoidPtrTy Tgt, char C, uint64_t N) {
   return TgtIt;
 }
 
-#define RW(TY, NAME)                                                           \
-  TY __inputgen_get_##NAME(BranchHint *BHs, int32_t BHSize) {                  \
-    return getInputGenRT().getNewStub<TY>(BHs, BHSize);                        \
-  }                                                                            \
-  void __inputgen_access_##NAME(VoidPtrTy Ptr, int64_t Val, int32_t Size,      \
-                                VoidPtrTy Base, int32_t Kind, BranchHint *BHs, \
-                                int32_t BHSize) {                              \
-    switch (Kind) {                                                            \
-    case 0:                                                                    \
-      getInputGenRT().read<TY>(Ptr, Base, Size, BHs, BHSize);                  \
-      return;                                                                  \
-    case 1:                                                                    \
-      TY TyVal;                                                                \
-      /* We need to reinterpret_cast fp types because they are just bitcast    \
-         to the int64_t type in LLVM. */                                       \
-      if constexpr (std::is_same<TY, float>::value) {                          \
-        int32_t Trunc = (int32_t)Val;                                          \
-        TyVal = *reinterpret_cast<TY *>(&Trunc);                               \
-      } else if constexpr (std::is_same<TY, double>::value) {                  \
-        TyVal = *reinterpret_cast<TY *>(&Val);                                 \
-      } else {                                                                 \
-        TyVal = (TY)Val;                                                       \
-      }                                                                        \
-      getInputGenRT().write<TY>(Ptr, TyVal, Size);                             \
-      return;                                                                  \
-    default:                                                                   \
-      abort();                                                                 \
-    }                                                                          \
-  }
-
-#define RWREF(TY, NAME)                                                        \
-  TY __inputgen_get_##NAME(BranchHint *BHs, int32_t BHSize) {                  \
-    return getInputGenRT().getNewStub<TY>(BHs, BHSize);                        \
-  }                                                                            \
-  void __inputgen_access_##NAME(VoidPtrTy Ptr, int64_t Val, int32_t Size,      \
-                                VoidPtrTy Base, int32_t Kind, BranchHint *BHs, \
-                                int32_t BHSize) {                              \
-    static_assert(sizeof(TY) > 8);                                             \
-    TY TyVal;                                                                  \
-    switch (Kind) {                                                            \
-    case 0:                                                                    \
-      getInputGenRT().read<TY>(Ptr, Base, Size, BHs, BHSize);                  \
-      return;                                                                  \
-    case 1:                                                                    \
-      TyVal = *(TY *)Val;                                                      \
-      getInputGenRT().write<TY>(Ptr, TyVal, Size);                             \
-      return;                                                                  \
-    default:                                                                   \
-      abort();                                                                 \
-    }                                                                          \
-  }
-
-RW(bool, i1)
-RW(char, i8)
-RW(short, i16)
-RW(int32_t, i32)
-RW(int64_t, i64)
-RW(float, float)
-RW(double, double)
-RW(VoidPtrTy, ptr)
-RWREF(__int128, i128)
-RWREF(long double, x86_fp80)
-#undef RW
-
-#define ARG(TY, NAME)                                                          \
-  TY __inputgen_arg_##NAME(BranchHint *BHs, int32_t BHSize) {                  \
-    return getInputGenRT().getNewArg<TY>(BHs, BHSize);                         \
-  }
-
-ARG(bool, i1)
-ARG(char, i8)
-ARG(short, i16)
-ARG(int32_t, i32)
-ARG(int64_t, i64)
-ARG(float, float)
-ARG(double, double)
-ARG(VoidPtrTy, ptr)
-ARG(__int128, i128)
-ARG(long double, x86_fp80)
-#undef ARG
-
 void __inputgen_use(VoidPtrTy Ptr, uint32_t Size) { useValue(Ptr, Size); }
 
 void __inputgen_cmp_ptr(VoidPtrTy A, VoidPtrTy B, int32_t Predicate) {
@@ -1335,7 +952,7 @@ int main(int argc, char **argv) {
   if (Start + 1 != End)
     return 1;
 
-  InputGenConfTy InputGenConf;
+  InputRecordConfTy InputGenConf;
 
   INPUTGEN_TIMER_START(IGGenAll);
   std::function<void()> RunInputGen;
@@ -1380,4 +997,10 @@ int main(int argc, char **argv) {
   RunInputGen();
 
   return 0;
+}
+
+#define __IG_OBJ__ getInputGenRT()
+#include "interface.def"
+extern "C" {
+DEFINE_INTERFACE(inputgen)
 }

@@ -221,7 +221,6 @@ public:
   bool instrumentModule(Module &);
   bool instrumentEntryPoint(Module &, Function &, bool);
   bool instrumentModuleForFunction(Module &, Function &);
-  std::unique_ptr<Module> generateEntryPointModule(Module &M, Function &);
   bool instrumentFunctionPtrs(Module &);
 
 private:
