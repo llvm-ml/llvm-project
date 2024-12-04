@@ -323,7 +323,7 @@ void __record_pop() { std::cout << "Stop recording\n"; }
 }
 
 #define __IG_OBJ__ getInputRecordRT()
-#include "interface.def"
+#include "rt-common-interface.def"
 extern "C" {
 DEFINE_INTERFACE(record)
 }

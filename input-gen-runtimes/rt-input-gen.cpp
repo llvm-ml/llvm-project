@@ -1000,7 +1000,7 @@ int main(int argc, char **argv) {
 }
 
 #define __IG_OBJ__ getInputGenRT()
-#include "interface.def"
+#include "rt-common-interface.def"
 extern "C" {
 DEFINE_INTERFACE(inputgen)
 }
