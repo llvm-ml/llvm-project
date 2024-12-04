@@ -59,6 +59,7 @@
 #include "llvm/Support/BLAKE3.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/HashBuilder.h"
@@ -376,13 +377,13 @@ void InputGenInstrumenter::instrumentCmp(ICmpInst *Cmp) {
   IRB.CreateCall(CmpPtrCallback, {LHS, RHS, IRB.getInt32(Cmp->getPredicate())});
 }
 
-void InputGenInstrumenter::instrumentMop(const InterestingMemoryAccess &Access,
-                                         const DataLayout &DL) {
+void InputGenInstrumenter::instrumentMop(
+    const InterestingMemoryAccess &Access) {
 
   if (Access.MaybeMask)
-    instrumentMaskedLoadOrStore(Access, DL);
+    instrumentMaskedLoadOrStore(Access);
   else
-    instrumentAddress(Access, DL);
+    instrumentAddress(Access);
 }
 
 static Value *igGetUnderlyingObject(Value *Addr) {
@@ -397,7 +398,7 @@ static Value *igGetUnderlyingObject(Value *Addr) {
 }
 
 void InputGenInstrumenter::instrumentMaskedLoadOrStore(
-    const InterestingMemoryAccess &Access, const DataLayout &DL) {
+    const InterestingMemoryAccess &Access) {
   auto *CI = dyn_cast<CallInst>(Access.I);
   if (!CI)
     llvm_unreachable("Unexpected");
@@ -446,14 +447,14 @@ void InputGenInstrumenter::instrumentMaskedLoadOrStore(
           // Unimplemented, but we abort() in the runtime
           break;
         }
-        int32_t AllocSize = DL.getTypeAllocSize(ElTy);
+        int32_t AllocSize = DL->getTypeAllocSize(ElTy);
         emitMemoryAccessCallback(IRB, GEP, V, ElTy, AllocSize, Access.Kind,
                                  Object, nullptr);
       });
 }
 
 void InputGenInstrumenter::instrumentAddress(
-    const InterestingMemoryAccess &Access, const DataLayout &DL) {
+    const InterestingMemoryAccess &Access) {
   IRBuilder<> IRB(Access.I);
   IRB.SetCurrentDebugLocation(Access.I->getDebugLoc());
 
@@ -528,7 +529,7 @@ void InputGenInstrumenter::instrumentAddress(
         llvm_unreachable("Scalable vectors unsupported.");
       }
     } else {
-      int32_t AllocSize = DL.getTypeAllocSize(TheType);
+      int32_t AllocSize = DL->getTypeAllocSize(TheType);
       emitMemoryAccessCallback(IRB, TheAddr, TheValue, TheType, AllocSize,
                                Access.Kind, Object, ValueToReplace);
     }
@@ -546,6 +547,29 @@ void InputGenInstrumenter::instrumentAddress(
   HandleType(Access.AccessTy, Access.Addr, Access.V, ValueToReplace);
 }
 
+Value *InputGenInstrumenter::getValueForInterface(IRBuilderBase &IRB,
+                                                  Value *V) {
+  if (!V)
+    return ConstantInt::getNullValue(Int64Ty);
+  Type *AccessTy = V->getType();
+  int32_t AllocSize = DL->getTypeAllocSize(AccessTy);
+  // If the value cannot fit in an i64, we need to pass it by reference.
+  if (AllocSize > InterfaceValueTypeSize) {
+    AllocaInst *Alloca = IRB.CreateAlloca(AccessTy);
+    BasicBlock &EntryBlock = IRB.GetInsertBlock()->getParent()->getEntryBlock();
+    Alloca->moveBefore(EntryBlock, EntryBlock.getFirstNonPHIOrDbgOrAlloca());
+    IRB.CreateStore(V, Alloca);
+    return IRB.CreateBitOrPointerCast(Alloca, Int64Ty);
+  } else if (AccessTy->isIntOrIntVectorTy()) {
+    return IRB.CreateZExtOrTrunc(V, Int64Ty);
+  } else {
+    return IRB.CreateZExtOrTrunc(
+        IRB.CreateBitOrPointerCast(
+            V, IntegerType::get(IRB.getContext(), AllocSize * 8)),
+        Int64Ty);
+  }
+}
+
 void InputGenInstrumenter::emitMemoryAccessCallback(
     IRBuilderBase &IRB, Value *Addr, Value *V, Type *AccessTy,
     int32_t AllocSize, InterestingMemoryAccess::KindTy Kind, Value *Object,
@@ -555,27 +579,7 @@ void InputGenInstrumenter::emitMemoryAccessCallback(
       GV && isLibCGlobal(GV->getName()))
     return;
 
-  Value *Val = ConstantInt::getNullValue(Int64Ty);
-  if (V) {
-    // If the value cannot fit in an i64, we need to pass it by reference.
-    if (AllocSize > 8) {
-      AllocaInst *Alloca = IRB.CreateAlloca(AccessTy);
-      BasicBlock &EntryBlock =
-          IRB.GetInsertBlock()->getParent()->getEntryBlock();
-      Alloca->moveBefore(EntryBlock, EntryBlock.getFirstNonPHIOrDbgOrAlloca());
-      IRB.CreateStore(V, Alloca);
-      Val = IRB.CreateBitOrPointerCast(Alloca, Int64Ty);
-    } else if (AccessTy->isIntOrIntVectorTy()) {
-      Val = IRB.CreateZExtOrTrunc(V, Int64Ty);
-    } else if (V->getType()->canLosslesslyBitCastTo(
-                   IntegerType::get(IRB.getContext(), AllocSize * 8))) {
-      Val = IRB.CreateZExtOrTrunc(
-          IRB.CreateBitOrPointerCast(
-              V, IntegerType::get(IRB.getContext(), AllocSize * 8)),
-          Int64Ty);
-    }
-  }
-
+  Value *Val = getValueForInterface(IRB, V);
   auto *Ptr = IRB.CreateAddrSpaceCast(Addr, PtrTy);
   auto *Base = IRB.CreateAddrSpaceCast(Object, PtrTy);
   SmallVector<Value *, 7> Args = {Ptr, Val,
@@ -705,6 +709,7 @@ bool ModuleInputGenInstrumenter::instrumentModule(Module &M) {
   case IG_Generate:
     IGI.provideGlobals(M);
     renameGlobals(M, *TLI);
+    LLVM_FALLTHROUGH;
   case IG_Record:
     for (auto &Fn : M)
       if (!Fn.isDeclaration())
@@ -876,9 +881,12 @@ void InputGenInstrumenter::initializeCallbacks(Module &M) {
         Prefix + "access_" + ::getTypeName(Ty), VoidTy, PtrTy, Int64Ty, Int32Ty,
         PtrTy, Int32Ty, PtrTy, Int32Ty);
     StubValueGenCallback[Ty] = M.getOrInsertFunction(
-        Prefix + "get_" + ::getTypeName(Ty), Ty, PtrTy, Int32Ty);
+        Prefix + "stub_" + ::getTypeName(Ty), Ty, PtrTy, Int32Ty);
     ArgGenCallback[Ty] = M.getOrInsertFunction(
         Prefix + "arg_" + ::getTypeName(Ty), Ty, PtrTy, Int32Ty);
+    ArgRecordCallback[Ty] =
+        M.getOrInsertFunction(Prefix + "arg_record_" + ::getTypeName(Ty),
+                              VoidTy, Int64Ty, PtrTy, Int32Ty);
   }
 
   InputGenMemmove =
@@ -951,7 +959,7 @@ void InputGenInstrumenter::setABIInfo(TY &CorF,
       InterestingMemoryAccess IMA = {
           &*IRB.GetInsertPoint(),       Addr, Ty, nullptr, nullptr,
           InterestingMemoryAccess::READ};
-      instrumentMop(IMA, DL);
+      instrumentMop(IMA);
     }
     ++Idx;
   }
@@ -1481,12 +1489,8 @@ void InputGenInstrumenter::createRecordingEntryPoint(Function &F) {
       getCallbackPrefix(Mode) + "push", FunctionType::get(VoidTy, false));
   IRB.CreateCall(PushFn, {});
 
-  for (auto &Arg : F.args()) {
-    FunctionCallee ArgPtrFn = M.getOrInsertFunction(
-        getCallbackPrefix(Mode) + "arg_" + ::getTypeName(Arg.getType()),
-        FunctionType::get(Arg.getType(), {Arg.getType()}, false));
-    IRB.CreateCall(ArgPtrFn, {&Arg});
-  }
+  for (auto &Arg : F.args())
+    recordValueUsingCallbacks(M, IRB, ArgRecordCallback, &Arg);
 
   FunctionCallee PopFn = M.getOrInsertFunction(
       getCallbackPrefix(Mode) + "pop", FunctionType::get(VoidTy, false));
@@ -1500,7 +1504,6 @@ void InputGenInstrumenter::createRecordingEntryPoint(Function &F) {
 }
 
 void InputGenInstrumenter::createGlobalCalls(Module &M, IRBuilder<> &IRB) {
-  auto DL = M.getDataLayout();
   FunctionCallee GVFn = M.getOrInsertFunction(
       getCallbackPrefix(Mode) + "global",
       FunctionType::get(VoidTy, {Int32Ty, PtrTy, PtrTy, Int32Ty}, false));
@@ -1510,7 +1513,7 @@ void InputGenInstrumenter::createGlobalCalls(Module &M, IRBuilder<> &IRB) {
   for (auto &It : MaybeExtInitializedGlobals) {
     auto *GV = It.first;
     auto *GVPtr = It.second ? It.second : Constant::getNullValue(PtrTy);
-    auto GVSize = DL.getTypeAllocSize(GV->getValueType());
+    auto GVSize = DL->getTypeAllocSize(GV->getValueType());
     IRB.CreateCall(
         GVFn, {NumGlobalsVal, GV, GVPtr, ConstantInt::get(Int32Ty, GVSize)});
   }
@@ -1741,6 +1744,46 @@ InputGenInstrumenter::getBranchHints(Value *V, IRBuilderBase &IRB,
     }
   }
   return {Array, Length};
+}
+
+void InputGenInstrumenter::recordValueUsingCallbacks(Module &M,
+                                                     IRBuilderBase &IRB,
+                                                     CallbackCollectionTy &CC,
+                                                     Value *V) {
+  Type *T = V->getType();
+  if (auto *ST = dyn_cast<StructType>(T)) {
+    for (unsigned It = 0; It < ST->getNumElements(); It++) {
+      V, recordValueUsingCallbacks(M, IRB, CC, IRB.CreateExtractValue(V, {It}));
+    }
+  } else if (auto *AT = dyn_cast<ArrayType>(T)) {
+    auto Count = AT->getArrayNumElements();
+    for (unsigned It = 0; It < Count; It++) {
+      V, recordValueUsingCallbacks(M, IRB, CC, IRB.CreateExtractValue(V, {It}));
+    }
+  } else if (auto *VT = dyn_cast<VectorType>(T)) {
+    if (!VT->getElementCount().isScalable()) {
+      auto Count = VT->getElementCount().getFixedValue();
+      for (unsigned It = 0; It < Count; It++)
+        recordValueUsingCallbacks(
+            M, IRB, CC, IRB.CreateExtractElement(V, IRB.getInt64(It)));
+    } else {
+      llvm_unreachable("Scalable vectors unsupported.");
+    }
+  } else {
+    auto *OrigTy = T;
+    if (isa<PointerType>(T) && T->getPointerAddressSpace())
+      T = T->getPointerTo();
+    FunctionCallee Fn = CC[T];
+    if (!Fn.getCallee()) {
+      LLVM_DEBUG(dbgs() << "No value record callback for " << *T << "\n");
+      IRB.CreateIntrinsic(VoidTy, Intrinsic::trap, {});
+    } else {
+      SmallVector<Value *, 3> Args{getValueForInterface(IRB, V)};
+      auto BHs = getBranchHints(nullptr, IRB, nullptr);
+      Args.insert(Args.end(), BHs.begin(), BHs.end());
+      IRB.CreateCall(Fn, Args);
+    }
+  }
 }
 
 Value *InputGenInstrumenter::constructTypeUsingCallbacks(
@@ -2123,8 +2166,6 @@ void InputGenInstrumenter::instrumentFunction(Function &F) {
                       << "\n");
   }
 
-  auto DL = F.getParent()->getDataLayout();
-
   for (auto *Unreachable : ToInstrumentUnreachable)
     instrumentUnreachable(Unreachable);
   for (auto *Cmp : ToInstrumentCmp)
@@ -2133,7 +2174,7 @@ void InputGenInstrumenter::instrumentFunction(Function &F) {
     if (isa<MemIntrinsic>(IMA.I))
       instrumentMemIntrinsic(cast<MemIntrinsic>(IMA.I));
     else
-      instrumentMop(IMA, DL);
+      instrumentMop(IMA);
     NumInstrumented++;
   }
 

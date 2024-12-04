@@ -10,7 +10,7 @@
 using BranchHint = llvm::inputgen::BranchHint;
 
 namespace {
-int VERBOSE = 0;
+int VERBOSE = 1;
 int TIMING = 0;
 } // namespace
 
@@ -438,5 +438,19 @@ private:
     OutputLimits.update(Offset, Size);
   }
 };
+
+struct GenValTy {
+  uint8_t Content[MaxPrimitiveTypeSize] = {0};
+  static_assert(sizeof(Content) == MaxPrimitiveTypeSize);
+  int32_t IsPtr;
+};
+
+template <typename T> static GenValTy toGenValTy(T A, int32_t IsPtr) {
+  GenValTy U;
+  static_assert(sizeof(T) <= sizeof(U.Content));
+  memcpy(U.Content, &A, sizeof(A));
+  U.IsPtr = IsPtr;
+  return U;
+}
 
 #endif // _INPUT_GEN_RUNTIMES_RT_H_

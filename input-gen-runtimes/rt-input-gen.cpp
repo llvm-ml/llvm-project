@@ -27,6 +27,7 @@
 #include <vector>
 
 #include "rt-common.hpp"
+#include "llvm/Support/ErrorHandling.h"
 
 namespace {
 INPUTGEN_TIMER_DEFINE(IGLastGen);
@@ -54,19 +55,6 @@ static void dumpBranchHints(BranchHint *BHs, int32_t BHSize) {
     if constexpr (!std::is_same<__int128, T>::value)
       std::cerr << "Val " << *reinterpret_cast<T *>(BH.Val) << std::endl;
   }
-}
-struct GenValTy {
-  uint8_t Content[MaxPrimitiveTypeSize] = {0};
-  static_assert(sizeof(Content) == MaxPrimitiveTypeSize);
-  int32_t IsPtr;
-};
-
-template <typename T> static GenValTy toGenValTy(T A, int32_t IsPtr) {
-  GenValTy U;
-  static_assert(sizeof(T) <= sizeof(U.Content));
-  memcpy(U.Content, &A, sizeof(A));
-  U.IsPtr = IsPtr;
-  return U;
 }
 
 struct RetryInfoTy {
@@ -375,14 +363,19 @@ struct InputGenRTTy {
     }
   }
 
-  template <typename T> T getNewArg(BranchHint *BHs, int32_t BHSize) {
+  template <typename T> T generateNewArg(BranchHint *BHs, int32_t BHSize) {
     T V = getNewValue<T>(BHs, BHSize);
     GenVals.push_back(toGenValTy(V, std::is_pointer<T>::value));
     NumArgs++;
     return V;
   }
 
-  template <typename T> T getNewStub(BranchHint *BHs, int32_t BHSize) {
+  template <typename T> void recordArg(T Val) {
+    llvm_unreachable("Record in input gen?");
+  }
+
+  template <typename T>
+  T generateNewStubReturn(BranchHint *BHs, int32_t BHSize) {
     T V = getNewValue<T>(BHs, BHSize);
     GenVals.push_back(toGenValTy(V, std::is_pointer<T>::value));
     return V;

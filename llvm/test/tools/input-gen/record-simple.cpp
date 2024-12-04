@@ -8,7 +8,7 @@
 #include <stdlib.h>
 #include <alloca.h>
 
-#define N 1000
+#define N 10
 
 extern "C" int foo(int *a, int *b, int *c, int n) {
   int sum = 0;

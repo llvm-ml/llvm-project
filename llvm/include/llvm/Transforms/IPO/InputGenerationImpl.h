@@ -95,6 +95,11 @@ public:
     FloatTy = Type::getFloatTy(*Ctx);
     DoubleTy = Type::getDoubleTy(*Ctx);
     X86_FP80Ty = Type::getX86_FP80Ty(*Ctx);
+
+    DL = &M.getDataLayout();
+
+    InterfaceValueType = Int64Ty;
+    InterfaceValueTypeSize = DL->getTypeAllocSize(InterfaceValueType);
   }
 
   typedef DenseMap<Type *, FunctionCallee> CallbackCollectionTy;
@@ -111,16 +116,13 @@ public:
   void declareProbeStackFuncs(Module &M);
   void instrumentCmp(ICmpInst *Cmp);
   void instrumentUnreachable(UnreachableInst *Unreachable);
-  void instrumentMop(const InterestingMemoryAccess &Access,
-                     const DataLayout &DL);
-  void instrumentAddress(const InterestingMemoryAccess &Access,
-                         const DataLayout &DL);
+  void instrumentMop(const InterestingMemoryAccess &Access);
+  void instrumentAddress(const InterestingMemoryAccess &Access);
   void emitMemoryAccessCallback(IRBuilderBase &IRB, Value *Addr, Value *V,
                                 Type *AccessTy, int32_t AllocSize,
                                 InterestingMemoryAccess::KindTy Kind,
                                 Value *Object, Value *ValueToReplace);
-  void instrumentMaskedLoadOrStore(const InterestingMemoryAccess &Access,
-                                   const DataLayout &DL);
+  void instrumentMaskedLoadOrStore(const InterestingMemoryAccess &Access);
   void instrumentMemIntrinsic(MemIntrinsic *MI);
 
   void handleUnreachable(Module &M);
@@ -130,6 +132,9 @@ public:
                                      CallbackCollectionTy &CC, Type *T,
                                      Value *ValueToReplace,
                                      ValueToValueMapTy *VMap);
+  void recordValueUsingCallbacks(Module &M, IRBuilderBase &IRB,
+                                 CallbackCollectionTy &CC, Value *V);
+  Value *getValueForInterface(IRBuilderBase &IRB, Value *V);
   Value *constructFpFromPotentialCallees(const CallBase &Caller, Value &V,
                                          IRBuilderBase &IRB,
                                          SetVector<Instruction *> &ToDelete);
@@ -173,10 +178,13 @@ public:
   IGInstrumentationModeTy Mode;
   Type *VoidTy, *FloatTy, *DoubleTy, *X86_FP80Ty;
   IntegerType *Int1Ty, *Int8Ty, *Int16Ty, *Int32Ty, *Int64Ty, *Int128Ty;
+  IntegerType *InterfaceValueType;
+  int InterfaceValueTypeSize;
   PointerType *PtrTy;
   LLVMContext *Ctx;
 
   AnalysisManager<Module> &MAM;
+  const DataLayout *DL;
 
   void initializeCallbacks(Module &M);
 
@@ -193,6 +201,7 @@ private:
   CallbackCollectionTy InputGenMemoryAccessCallback;
   CallbackCollectionTy StubValueGenCallback;
   CallbackCollectionTy ArgGenCallback;
+  CallbackCollectionTy ArgRecordCallback;
 
   FunctionCallee InputGenMemmove, InputGenMemcpy, InputGenMemset;
   FunctionCallee UseCallback;

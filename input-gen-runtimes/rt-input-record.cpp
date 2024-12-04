@@ -30,22 +30,12 @@
 
 using BranchHint = llvm::inputgen::BranchHint;
 
-struct GenValTy {
-  uint8_t Content[MaxPrimitiveTypeSize] = {0};
-  static_assert(sizeof(Content) == MaxPrimitiveTypeSize);
-  int32_t IsPtr;
-};
-
 struct InputRecordConfTy {
   InputRecordConfTy() {}
 };
 
 struct InputRecordRTTy {
-  InputRecordRTTy(const char *ExecPath, const char *OutputDir,
-                  const char *FuncIdent, VoidPtrTy StackPtr, int Seed,
-                  InputRecordConfTy InputGenConf)
-      : InputGenConf(InputGenConf), StackPtr(StackPtr), FuncIdent(FuncIdent),
-        OutputDir(OutputDir), ExecPath(ExecPath) {
+  InputRecordRTTy(InputRecordConfTy InputGenConf) : InputGenConf(InputGenConf) {
     OutputObjIdxOffset = OA.globalPtrToObjIdx(OutputMem.AlignedMemory);
   }
   ~InputRecordRTTy() {}
@@ -125,11 +115,23 @@ struct InputRecordRTTy {
     abort();
   }
 
-  template <typename T> T getNewArg(BranchHint *BHs, int32_t BHSize) {
+  template <typename T> T generateNewArg(BranchHint *BHs, int32_t BHSize) {
     abort();
   }
 
-  template <typename T> T getNewStub(BranchHint *BHs, int32_t BHSize) {
+  template <typename T> void recordArg(T Val) {
+    if constexpr (!std::is_same<T, __int128>::value) {
+      if constexpr (std::is_pointer<T>::value)
+        INPUTGEN_DEBUG(std::cerr << "Recorded arg " << (void *)Val
+                                 << std::endl);
+      else
+        INPUTGEN_DEBUG(std::cerr << "Recorded arg " << Val << std::endl);
+    }
+    GenVals.push_back(toGenValTy(Val, std::is_pointer<T>::value));
+  }
+
+  template <typename T>
+  T generateNewStubReturn(BranchHint *BHs, int32_t BHSize) {
     abort();
   }
 
@@ -314,12 +316,22 @@ struct InputRecordRTTy {
   }
 };
 
-static InputRecordRTTy *InputRecordRT;
+static InputRecordRTTy *InputRecordRT = nullptr;
 static InputRecordRTTy &getInputRecordRT() { return *InputRecordRT; }
 
 extern "C" {
-void __record_push() { std::cout << "Start recording\n"; }
-void __record_pop() { std::cout << "Stop recording\n"; }
+void __record_push() {
+  if (InputRecordRT) {
+    std::cerr << "Nested recordings! Abort!" << std::endl;
+    abort();
+  }
+  std::cout << "Start recording\n";
+  InputRecordRT = new InputRecordRTTy(InputRecordConfTy());
+}
+void __record_pop() {
+  std::cout << "Stop recording\n";
+  delete InputRecordRT;
+}
 }
 
 #define __IG_OBJ__ getInputRecordRT()

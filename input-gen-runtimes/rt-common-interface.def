@@ -3,19 +3,10 @@
 #error "__IG_OBJ__ must be defined"
 #endif
 
-#define RW(TY, NAME, PREFIX)                                                   \
-  TY __##PREFIX##_get_##NAME(BranchHint *BHs, int32_t BHSize) {                \
-    return __IG_OBJ__.getNewStub<TY>(BHs, BHSize);                             \
-  }                                                                            \
-  void __##PREFIX##_access_##NAME(VoidPtrTy Ptr, int64_t Val, int32_t Size,    \
-                                  VoidPtrTy Base, int32_t Kind,                \
-                                  BranchHint *BHs, int32_t BHSize) {           \
-    switch (Kind) {                                                            \
-    case 0:                                                                    \
-      __IG_OBJ__.read<TY>(Ptr, Base, Size, BHs, BHSize);                       \
-      return;                                                                  \
-    case 1:                                                                    \
-      TY TyVal;                                                                \
+#define INTERFACE_FUNCS(TY, NAME, PREFIX)                                      \
+  static TY __ig_convert_##NAME##_from_i64(int64_t Val) {                      \
+    TY TyVal;                                                                  \
+    if constexpr (sizeof(TY) <= sizeof(int64_t)) {                             \
       /* We need to reinterpret_cast fp types because they are just bitcast    \
          to the int64_t type in LLVM. */                                       \
       if constexpr (std::is_same<TY, float>::value) {                          \
@@ -26,58 +17,47 @@
       } else {                                                                 \
         TyVal = (TY)Val;                                                       \
       }                                                                        \
-      __IG_OBJ__.write<TY>(Ptr, TyVal, Size);                                  \
-      return;                                                                  \
-    default:                                                                   \
-      abort();                                                                 \
+    } else {                                                                   \
+      TyVal = *(TY *)Val;                                                      \
     }                                                                          \
-  }
-
-#define RWREF(TY, NAME, PREFIX)                                                \
-  TY __##PREFIX##_get_##NAME(BranchHint *BHs, int32_t BHSize) {                \
-    return __IG_OBJ__.getNewStub<TY>(BHs, BHSize);                             \
+    return TyVal;                                                              \
   }                                                                            \
   void __##PREFIX##_access_##NAME(VoidPtrTy Ptr, int64_t Val, int32_t Size,    \
                                   VoidPtrTy Base, int32_t Kind,                \
                                   BranchHint *BHs, int32_t BHSize) {           \
-    static_assert(sizeof(TY) > 8);                                             \
-    TY TyVal;                                                                  \
     switch (Kind) {                                                            \
     case 0:                                                                    \
       __IG_OBJ__.read<TY>(Ptr, Base, Size, BHs, BHSize);                       \
       return;                                                                  \
-    case 1:                                                                    \
-      TyVal = *(TY *)Val;                                                      \
+    case 1: {                                                                  \
+      TY TyVal = __ig_convert_##NAME##_from_i64(Val);                          \
       __IG_OBJ__.write<TY>(Ptr, TyVal, Size);                                  \
       return;                                                                  \
+    }                                                                          \
     default:                                                                   \
       abort();                                                                 \
     }                                                                          \
-  }
-
-#define ARG(TY, NAME, PREFIX)                                                  \
+  }                                                                            \
+  TY __##PREFIX##_stub_##NAME(BranchHint *BHs, int32_t BHSize) {               \
+    return __IG_OBJ__.generateNewStubReturn<TY>(BHs, BHSize);                  \
+  }                                                                            \
   TY __##PREFIX##_arg_##NAME(BranchHint *BHs, int32_t BHSize) {                \
-    return __IG_OBJ__.getNewArg<TY>(BHs, BHSize);                              \
+    return __IG_OBJ__.generateNewArg<TY>(BHs, BHSize);                         \
+  }                                                                            \
+  void __##PREFIX##_arg_record_##NAME(int64_t Val, BranchHint *BHs,          \
+                                      int32_t BHSize) {                        \
+    TY TyVal = __ig_convert_##NAME##_from_i64(Val);                            \
+    __IG_OBJ__.recordArg<TY>(TyVal);                                           \
   }
 
-#define DEFINE_INTERFACE(__IG_PREFIX__)                                        \
-  ARG(bool, i1, __IG_PREFIX__)                                                 \
-  ARG(char, i8, __IG_PREFIX__)                                                 \
-  ARG(short, i16, __IG_PREFIX__)                                               \
-  ARG(int32_t, i32, __IG_PREFIX__)                                             \
-  ARG(int64_t, i64, __IG_PREFIX__)                                             \
-  ARG(float, float, __IG_PREFIX__)                                             \
-  ARG(double, double, __IG_PREFIX__)                                           \
-  ARG(VoidPtrTy, ptr, __IG_PREFIX__)                                           \
-  ARG(__int128, i128, __IG_PREFIX__)                                           \
-  ARG(long double, x86_fp80, __IG_PREFIX__)                                    \
-  RW(bool, i1, __IG_PREFIX__)                                                  \
-  RW(char, i8, __IG_PREFIX__)                                                  \
-  RW(short, i16, __IG_PREFIX__)                                                \
-  RW(int32_t, i32, __IG_PREFIX__)                                              \
-  RW(int64_t, i64, __IG_PREFIX__)                                              \
-  RW(float, float, __IG_PREFIX__)                                              \
-  RW(double, double, __IG_PREFIX__)                                            \
-  RW(VoidPtrTy, ptr, __IG_PREFIX__)                                            \
-  RWREF(__int128, i128, __IG_PREFIX__)                                         \
-  RWREF(long double, x86_fp80, __IG_PREFIX__)
+#define DEFINE_INTERFACE(PREFIX)                                               \
+  INTERFACE_FUNCS(bool, i1, PREFIX)                                            \
+  INTERFACE_FUNCS(char, i8, PREFIX)                                            \
+  INTERFACE_FUNCS(short, i16, PREFIX)                                          \
+  INTERFACE_FUNCS(int32_t, i32, PREFIX)                                        \
+  INTERFACE_FUNCS(int64_t, i64, PREFIX)                                        \
+  INTERFACE_FUNCS(float, float, PREFIX)                                        \
+  INTERFACE_FUNCS(double, double, PREFIX)                                      \
+  INTERFACE_FUNCS(VoidPtrTy, ptr, PREFIX)                                      \
+  INTERFACE_FUNCS(__int128, i128, PREFIX)                                      \
+  INTERFACE_FUNCS(long double, x86_fp80, PREFIX)
