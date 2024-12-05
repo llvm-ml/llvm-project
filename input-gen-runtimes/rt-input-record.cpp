@@ -29,7 +29,55 @@
 
 #include "rt-common.hpp"
 
+static void *(*RealMalloc)(size_t) = nullptr;
+static void (*RealFree)(void *) = nullptr;
+
+template <class T> struct IRAllocator {
+  typedef T value_type;
+
+  IRAllocator() = default;
+
+  template <class U> constexpr IRAllocator(const IRAllocator<U> &) noexcept {}
+
+  T *allocate(size_t Size) {
+    T *Ptr = static_cast<T *>(RealMalloc(Size * sizeof(T)));
+    if (!Ptr)
+      abort();
+    INPUTGEN_DEBUG(std::cerr << "[IRAllocator] Allocated " << toVoidPtr(Ptr)
+                             << " Size " << Size << "x" << sizeof(T)
+                             << std::endl);
+    return Ptr;
+  }
+
+  void deallocate(T *Ptr, size_t Size) noexcept {
+    INPUTGEN_DEBUG(std::cerr << "[IRAllocator] Freeing " << toVoidPtr(Ptr)
+                             << " Size " << Size << "x" << sizeof(T)
+                             << std::endl);
+    RealFree(Ptr);
+  }
+};
+template <class T, class U>
+bool operator==(const IRAllocator<T> &, const IRAllocator<U> &) {
+  return true;
+}
+template <class T, class U>
+bool operator!=(const IRAllocator<T> &, const IRAllocator<U> &) {
+  return false;
+}
+
+template <typename T> using IRVector = std::vector<T, IRAllocator<T>>;
+using IRString =
+    std::basic_string<char, std::char_traits<char>, IRAllocator<char>>;
+
 using BranchHint = llvm::inputgen::BranchHint;
+
+template <typename T, typename... _Args>
+std::unique_ptr<T> IRMakeUnique(_Args &&...Args) {
+  IRAllocator<T> A;
+  std::unique_ptr<T> UP(A.allocate(1));
+  new (UP.get()) T(std::forward<_Args>(Args)...);
+  return UP;
+}
 
 struct InputRecordConfTy {
   InputRecordConfTy() {}
@@ -66,8 +114,8 @@ struct InputRecordRTTy {
 
   VoidPtrTy StackPtr;
   intptr_t OutputObjIdxOffset;
-  std::string FuncIdent;
-  std::string OutputDir;
+  IRString FuncIdent;
+  IRString OutputDir;
   std::filesystem::path ExecPath;
   std::mt19937 Gen;
   InputRecordObjectAddressing OA;
@@ -77,17 +125,17 @@ struct InputRecordRTTy {
     size_t ObjIdx;
     uintptr_t Size;
   };
-  std::vector<GlobalTy> Globals;
-  std::vector<intptr_t> FunctionPtrs;
+  IRVector<GlobalTy> Globals;
+  IRVector<intptr_t> FunctionPtrs;
 
   uint64_t NumNewValues = 0;
 
-  std::vector<GenValTy> GenVals;
+  IRVector<GenValTy> GenVals;
   uint32_t NumArgs = 0;
 
   // Storage for dynamic objects
-  std::vector<std::unique_ptr<ObjectTy>> Objects;
-  std::vector<size_t> GlobalBundleObjects;
+  IRVector<std::unique_ptr<ObjectTy>> Objects;
+  IRVector<size_t> GlobalBundleObjects;
 
   int rand() { abort(); }
 
@@ -191,7 +239,7 @@ struct InputRecordRTTy {
     INPUTGEN_DEBUG(std::cerr << "Malloc " << toVoidPtr(Ptr) << " Size " << Size
                              << std::endl);
     size_t Idx = Objects.size();
-    Objects.push_back(std::make_unique<ObjectTy>(Idx, OA, Ptr, Size));
+    Objects.push_back(IRMakeUnique<ObjectTy>(Idx, OA, Ptr, Size));
   }
 
   void registerGlobal(VoidPtrTy, VoidPtrTy *ReplGlobal, int32_t GlobalSize) {
@@ -219,9 +267,9 @@ struct InputRecordRTTy {
       report(Null);
     } else {
       auto FileName = ExecPath.filename().string();
-      std::string ReportOutName(OutputDir + "/" + FileName + ".report." +
+      IRString ReportOutName(OutputDir + "/" + FileName + ".report." +
                                 FuncIdent + ".txt");
-      std::string InputOutName(OutputDir + "/" + FileName + ".input." +
+      IRString InputOutName(OutputDir + "/" + FileName + ".input." +
                                FuncIdent + ".bin");
       std::ofstream InputOutStream(InputOutName,
                                    std::ios::out | std::ios::binary);
@@ -251,7 +299,7 @@ struct InputRecordRTTy {
     writeV(InputOut, NumObjects);
     INPUTGEN_DEBUG(printf("Num Obj %u\n", NumObjects));
 
-    std::vector<ObjectTy::AlignedMemoryChunk> MemoryChunks;
+    IRVector<ObjectTy::AlignedMemoryChunk> MemoryChunks;
     uintptr_t I = 0;
     for (auto &Obj : Objects) {
       auto MemoryChunk = Obj->getAlignedInputMemory();
@@ -374,7 +422,9 @@ static struct InputRecordRTInit {
   bool Initialized = false;
   std::unique_ptr<InputRecordRTTy> IRRT = nullptr;
   InputRecordRTInit() {
-    IRRT.reset(new InputRecordRTTy(InputRecordConfTy()));
+    IRAllocator<InputRecordRTTy> A;
+    IRRT.reset(A.allocate(1));
+    new (IRRT.get()) InputRecordRTTy(InputRecordConfTy());
     Initialized = true;
   }
 } InputRecordRT;
@@ -404,20 +454,25 @@ void ObjectTy::read(VoidPtrTy Ptr, uint32_t Size, BranchHint *BHs,
 }
 
 void *malloc(size_t Size) {
-  void *(*RealMalloc)(size_t) =
-      reinterpret_cast<decltype(RealMalloc)>(dlsym(RTLD_NEXT, "malloc"));
-  void *Mem = RealMalloc(Size);
+  static void *(*LRealMalloc)(size_t) = []() {
+    RealMalloc =
+        reinterpret_cast<decltype(RealMalloc)>(dlsym(RTLD_NEXT, "malloc"));
+    return RealMalloc;
+  }();
+  void *Mem = LRealMalloc(Size);
   if (isRTInitialized())
     getInputRecordRT().atMalloc(reinterpret_cast<VoidPtrTy>(Mem), Size);
   return Mem;
 }
 
 void free(void *Ptr) {
-  void (*RealFree)(void *) =
-      reinterpret_cast<decltype(RealFree)>(dlsym(RTLD_NEXT, "free"));
-  assert(isRTInitialized());
-  getInputRecordRT().atFree(reinterpret_cast<VoidPtrTy>(Ptr));
-  RealFree(Ptr);
+  static void (*LRealFree)(void *) = []() {
+    RealFree = reinterpret_cast<decltype(RealFree)>(dlsym(RTLD_NEXT, "free"));
+    return RealFree;
+  }();
+  if (isRTInitialized())
+    getInputRecordRT().atFree(reinterpret_cast<VoidPtrTy>(Ptr));
+  LRealFree(Ptr);
 }
 
 extern "C" {

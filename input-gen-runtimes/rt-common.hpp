@@ -71,7 +71,9 @@ template <typename T> static char *ccast(T *Ptr) {
   return reinterpret_cast<char *>(Ptr);
 }
 
-static void *toVoidPtr(VoidPtrTy Ptr) { return reinterpret_cast<void *>(Ptr); }
+template <typename T> static void *toVoidPtr(T Ptr) {
+  return static_cast<void *>(Ptr);
+}
 
 template <typename T> static T readV(std::ifstream &Input) {
   T El;
