@@ -60,15 +60,16 @@ template <typename T> static char *ccast(T *Ptr) {
   return reinterpret_cast<char *>(Ptr);
 }
 
+static void *toVoidPtr(VoidPtrTy Ptr) { return reinterpret_cast<void *>(Ptr); }
+
 template <typename T> static T readV(std::ifstream &Input) {
   T El;
   Input.read(ccast(&El), sizeof(El));
   return El;
 }
 
-template <typename T> static T writeV(std::ofstream &Output, T El) {
+template <typename T> static void writeV(std::ofstream &Output, T El) {
   Output.write(ccast(&El), sizeof(El));
-  return El;
 }
 
 struct ObjectAddressing {

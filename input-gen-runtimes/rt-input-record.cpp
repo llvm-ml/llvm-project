@@ -122,7 +122,7 @@ struct InputRecordRTTy {
   template <typename T> void recordArg(T Val) {
     if constexpr (!std::is_same<T, __int128>::value) {
       if constexpr (std::is_pointer<T>::value)
-        INPUTGEN_DEBUG(std::cerr << "Recorded arg " << (void *)Val
+        INPUTGEN_DEBUG(std::cerr << "Recorded arg " << toVoidPtr(Val)
                                  << std::endl);
       else
         INPUTGEN_DEBUG(std::cerr << "Recorded arg " << Val << std::endl);
@@ -149,20 +149,34 @@ struct InputRecordRTTy {
   template <>
   FunctionPtrTy getNewValue<FunctionPtrTy>(BranchHint *BHs, int32_t BHSize) {
     abort();
-    return nullptr;
   }
 
   template <typename T> void write(VoidPtrTy Ptr, T Val, uint32_t Size) {
-    std::cerr << "write!\n";
+    if (!Recording)
+      return;
+    INPUTGEN_DEBUG(std::cerr << "write!\n");
   }
 
   template <typename T>
   void read(VoidPtrTy Ptr, VoidPtrTy Base, uint32_t Size, BranchHint *BHs,
             int32_t BHSize) {
-    std::cerr << "read!\n";
+    if (!Recording)
+      return;
+    INPUTGEN_DEBUG(std::cerr << "read!\n");
+  }
+
+  void atFree(VoidPtrTy Ptr) {
+    INPUTGEN_DEBUG(std::cerr << "Free " << toVoidPtr(Ptr) << std::endl);
+  }
+
+  void atMalloc(VoidPtrTy Ptr, size_t Size) {
+    INPUTGEN_DEBUG(std::cerr << "Malloc " << toVoidPtr(Ptr) << " Size " << Size
+                             << std::endl);
   }
 
   void registerGlobal(VoidPtrTy, VoidPtrTy *ReplGlobal, int32_t GlobalSize) {
+    std::cerr << "register global not implemented yet\n";
+    abort();
     auto Global = getNewGlobal(GlobalSize);
     Globals.push_back({Global.Ptr, Global.Idx, (uintptr_t)GlobalSize});
     *ReplGlobal = Global.Ptr;
@@ -314,24 +328,50 @@ struct InputRecordRTTy {
       writeV<intptr_t>(InputOut, FPOffset);
     }
   }
+
+  bool Recording = false;
+  void recordPush() {
+    if (Recording) {
+      std::cerr << "Nested recording! Abort!" << std::endl;
+      abort();
+    }
+    INPUTGEN_DEBUG(std::cout << "Start recording\n");
+    Recording = true;
+  }
+  void recordPop() {
+    if (!Recording) {
+      std::cerr << "Pop without push? Abort!" << std::endl;
+      abort();
+    }
+    INPUTGEN_DEBUG(std::cout << "Stop recording\n");
+    Recording = false;
+  }
 };
 
-static InputRecordRTTy *InputRecordRT = nullptr;
-static InputRecordRTTy &getInputRecordRT() { return *InputRecordRT; }
+static struct InputRecordRTInit {
+  std::unique_ptr<InputRecordRTTy> IRRT = nullptr;
+  InputRecordRTInit() { IRRT.reset(new InputRecordRTTy(InputRecordConfTy())); }
+} InputRecordRT;
+static InputRecordRTTy &getInputRecordRT() { return *InputRecordRT.IRRT; }
+
+void *malloc(size_t Size) {
+  void *(*RealMalloc)(size_t) =
+      reinterpret_cast<decltype(RealMalloc)>(dlsym(RTLD_NEXT, "malloc"));
+  void *Mem = RealMalloc(Size);
+  getInputRecordRT().atMalloc(reinterpret_cast<VoidPtrTy>(Mem), Size);
+  return Mem;
+}
+
+void free(void *Ptr) {
+  void (*RealFree)(void *) =
+      reinterpret_cast<decltype(RealFree)>(dlsym(RTLD_NEXT, "free"));
+  getInputRecordRT().atFree(reinterpret_cast<VoidPtrTy>(Ptr));
+  RealFree(Ptr);
+}
 
 extern "C" {
-void __record_push() {
-  if (InputRecordRT) {
-    std::cerr << "Nested recordings! Abort!" << std::endl;
-    abort();
-  }
-  std::cout << "Start recording\n";
-  InputRecordRT = new InputRecordRTTy(InputRecordConfTy());
-}
-void __record_pop() {
-  std::cout << "Stop recording\n";
-  delete InputRecordRT;
-}
+void __record_push() { getInputRecordRT().recordPush(); }
+void __record_pop() { getInputRecordRT().recordPop(); }
 }
 
 #define __IG_OBJ__ getInputRecordRT()
