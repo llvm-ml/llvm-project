@@ -69,6 +69,8 @@ template <typename T> using IRVector = std::vector<T, IRAllocator<T>>;
 using IRString =
     std::basic_string<char, std::char_traits<char>, IRAllocator<char>>;
 
+#include "rt-dump-input.hpp"
+
 using BranchHint = llvm::inputgen::BranchHint;
 
 template <typename T, typename... _Args>
@@ -188,6 +190,7 @@ struct InputRecordRTTy {
         INPUTGEN_DEBUG(std::cerr << "Recorded arg " << Val << std::endl);
     }
     GenVals.push_back(toGenValTy(Val, std::is_pointer<T>::value));
+    NumArgs++;
   }
 
   template <typename T>
@@ -273,128 +276,7 @@ struct InputRecordRTTy {
   void report() {
     std::ofstream InputOutStream(Conf.InputOutName.c_str(),
                                  std::ios::out | std::ios::binary);
-    report(InputOutStream);
-  }
-
-  void report(std::ofstream &InputOut) {
-    INPUTGEN_DEBUG({
-      printf("Args (%u total)\n", NumArgs);
-      for (size_t I = 0; I < NumArgs; ++I)
-        printf("Arg %zu: %p\n", I, (void *)GenVals[I].Content);
-      printf("Num new values: %lu\n", NumNewValues);
-      printf("Objects (%zu total)\n", Objects.size());
-    });
-
-    writeV<uintptr_t>(InputOut, OA.getSize());
-    writeV<uintptr_t>(InputOut, OutputObjIdxOffset);
-    int32_t SeedStub = 0;
-    writeV<uint32_t>(InputOut, SeedStub);
-
-    auto BeforeTotalSize = InputOut.tellp();
-    uint64_t TotalSize = 0;
-    writeV(InputOut, TotalSize);
-
-    uint32_t NumObjects = Objects.size();
-    writeV(InputOut, NumObjects);
-    INPUTGEN_DEBUG(printf("Num Obj %u\n", NumObjects));
-
-    IRVector<ObjectTy::AlignedMemoryChunk> MemoryChunks;
-    uintptr_t I = 0;
-    for (auto &Obj : Objects) {
-      auto MemoryChunk = Obj->getAlignedInputMemory();
-      INPUTGEN_DEBUG(printf(
-          "Obj #%zu aligned memory chunk at %p, input size %lu "
-          "offset %ld, output size %lu offset %ld, cmp size %lu offset %ld\n",
-          Obj->Idx, (void *)MemoryChunk.Ptr, MemoryChunk.InputSize,
-          MemoryChunk.InputOffset, MemoryChunk.OutputSize,
-          MemoryChunk.OutputOffset, MemoryChunk.CmpSize,
-          MemoryChunk.CmpOffset));
-      writeV<intptr_t>(InputOut, I);
-      writeV<intptr_t>(InputOut, MemoryChunk.InputSize);
-      writeV<intptr_t>(InputOut, MemoryChunk.InputOffset);
-      writeV<intptr_t>(InputOut, MemoryChunk.OutputSize);
-      writeV<intptr_t>(InputOut, MemoryChunk.OutputOffset);
-      writeV<intptr_t>(InputOut, MemoryChunk.CmpSize);
-      writeV<intptr_t>(InputOut, MemoryChunk.CmpOffset);
-      InputOut.write(reinterpret_cast<char *>(MemoryChunk.Ptr),
-                     MemoryChunk.InputSize);
-      TotalSize += MemoryChunk.OutputSize;
-      MemoryChunks.push_back(MemoryChunk);
-
-      assert(Obj->Idx == I);
-      I++;
-    }
-
-    INPUTGEN_DEBUG(printf("TotalSize %lu\n", TotalSize));
-    auto BeforeNumGlobals = InputOut.tellp();
-    InputOut.seekp(BeforeTotalSize);
-    writeV(InputOut, TotalSize);
-    InputOut.seekp(BeforeNumGlobals);
-
-    uint32_t NumGlobals = Globals.size();
-    writeV(InputOut, NumGlobals);
-    INPUTGEN_DEBUG(printf("Num Glob %u\n", NumGlobals));
-
-    for (uint32_t I = 0; I < NumGlobals; ++I) {
-      auto InputMem = Objects[Globals[I].ObjIdx]->getKnownSizeObjectInputMemory(
-          OA.globalPtrToLocalPtr(Globals[I].Ptr), Globals[I].Size);
-      VoidPtrTy InputStart = OA.localPtrToGlobalPtr(
-          Globals[I].ObjIdx + OutputObjIdxOffset, InputMem.Start);
-      writeV<VoidPtrTy>(InputOut, Globals[I].Ptr);
-      writeV<VoidPtrTy>(InputOut, InputStart);
-      writeV<uintptr_t>(InputOut, InputMem.Size);
-      INPUTGEN_DEBUG(printf("Glob %u %p in Obj #%zu input start %p size %zu\n",
-                            I, (void *)Globals[I].Ptr, Globals[I].ObjIdx,
-                            (void *)InputStart, InputMem.Size));
-    }
-
-    I = 0;
-    for (auto &Obj : Objects) {
-      writeV<intptr_t>(InputOut, Obj->Idx);
-      writeV<uintptr_t>(InputOut, Obj->Ptrs.size());
-      INPUTGEN_DEBUG(printf("O #%ld NP %ld\n", Obj->Idx, Obj->Ptrs.size()));
-      for (auto Ptr : Obj->Ptrs) {
-        writeV<intptr_t>(InputOut, Ptr);
-        INPUTGEN_DEBUG(printf("P at %ld : %p\n", Ptr,
-                              *reinterpret_cast<void **>(
-                                  MemoryChunks[Obj->Idx].Ptr +
-                                  MemoryChunks[Obj->Idx].InputOffset + Ptr)));
-      }
-
-      writeV<uintptr_t>(InputOut, Obj->FPtrs.size());
-      INPUTGEN_DEBUG(printf("O #%ld NFP %ld\n", Obj->Idx, Obj->FPtrs.size()));
-      for (auto Ptr : Obj->FPtrs) {
-        writeV<intptr_t>(InputOut, Ptr.first);
-        writeV<uint32_t>(InputOut, Ptr.second);
-        INPUTGEN_DEBUG(printf("FP at %ld : %u\n", Ptr.first, Ptr.second));
-      }
-
-      assert(Obj->Idx == I);
-      I++;
-    }
-
-    uint32_t NumGenVals = GenVals.size();
-    INPUTGEN_DEBUG(printf("Num GenVals %u\n", NumGenVals));
-    INPUTGEN_DEBUG(printf("Num Args %u\n", NumArgs));
-    writeV<uint32_t>(InputOut, NumGenVals);
-    writeV<uint32_t>(InputOut, NumArgs);
-    I = 0;
-    for (auto &GenVal : GenVals) {
-      INPUTGEN_DEBUG(printf("GenVal #%ld isPtr %d\n", I, GenVal.IsPtr));
-      INPUTGEN_DEBUG(printf("Content "));
-      for (unsigned J = 0; J < sizeof(GenVal.Content); J++)
-        INPUTGEN_DEBUG(printf("%d ", (int)GenVal.Content[J]));
-      INPUTGEN_DEBUG(printf("\n"));
-      static_assert(sizeof(GenVal.Content) == MaxPrimitiveTypeSize);
-      InputOut.write(ccast(GenVal.Content), MaxPrimitiveTypeSize);
-      writeV<int32_t>(InputOut, GenVal.IsPtr);
-    }
-
-    uint32_t NumGenFunctionPtrs = FunctionPtrs.size();
-    writeV<uint32_t>(InputOut, NumGenFunctionPtrs);
-    for (intptr_t FPOffset : FunctionPtrs) {
-      writeV<intptr_t>(InputOut, FPOffset);
-    }
+    dumpInput<InputRecordRTTy>(InputOutStream, *this);
   }
 
   bool Recording = false;
