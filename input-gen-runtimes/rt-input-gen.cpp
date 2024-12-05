@@ -184,7 +184,7 @@ struct InputGenRTTy {
     ~AlignedAllocation() { free(Memory); }
   };
   AlignedAllocation OutputMem;
-  ObjectAddressing OA;
+  InputGenObjectAddressing OA;
 
   struct GlobalTy {
     VoidPtrTy Ptr;
@@ -782,8 +782,8 @@ static InputGenRTTy *InputGenRT;
 static InputGenRTTy &getInputGenRT() { return *InputGenRT; }
 
 template <typename T>
-T ObjectTy::read(VoidPtrTy Ptr, uint32_t Size, BranchHint *BHs,
-                 int32_t BHSize) {
+void ObjectTy::read(VoidPtrTy Ptr, uint32_t Size, BranchHint *BHs,
+                    int32_t BHSize) {
   intptr_t Offset = OA.getOffsetFromObjBasePtr(Ptr);
   assert(Output.isAllocated(Offset, Size));
   Used.ensureAllocation(Offset, Size);
@@ -798,7 +798,7 @@ T ObjectTy::read(VoidPtrTy Ptr, uint32_t Size, BranchHint *BHs,
     return nullptr;
 
   T Val = getInputGenRT().getNewValue<T>(BHs, BHSize);
-  storeGeneratedValue(Val, Offset, Size);
+  storeInputValue(Val, Offset, Size);
 
   if constexpr (std::is_pointer<T>::value)
     Ptrs.insert(Offset);

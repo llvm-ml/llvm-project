@@ -14,7 +14,7 @@
 
 #include <sys/mman.h>
 
-#include "rt.hpp"
+#include "rt-common.hpp"
 
 namespace {
 int VERBOSE = 0;
@@ -25,7 +25,7 @@ INPUTGEN_TIMER_DEFINE(IRRun);
 
 } // namespace
 
-struct ObjectTy {
+struct ReplayObjectTy {
   VoidPtrTy Start;
   intptr_t InputSize;
   intptr_t InputOffset;
@@ -151,7 +151,7 @@ int main(int argc, char **argv) {
   std::ifstream Input(InputName, std::ios::in | std::ios::binary);
 
   auto OASize = readV<uintptr_t>(Input);
-  ObjectAddressing OA;
+  InputGenObjectAddressing OA;
   OA.setSize(OASize);
 
   auto ObjIdxOffset = readV<uintptr_t>(Input);
@@ -180,7 +180,7 @@ int main(int argc, char **argv) {
   // Increment by 1 just in case because apparently mmap can return a valid null
   // pointer
   VoidPtrTy CurPtrCmpMemory = (VoidPtrTy)PtrCmpRegion + 1;
-  std::vector<ObjectTy> Objects;
+  std::vector<ReplayObjectTy> Objects;
   for (uint32_t I = 0; I < NumObjects; I++) {
     [[maybe_unused]] auto Idx = readV<uintptr_t>(Input);
     assert(I == Idx);
@@ -229,7 +229,8 @@ int main(int argc, char **argv) {
       return;
     }
     VoidPtrTy LocalPtr = OA.globalPtrToLocalPtr(GlobalPtr);
-    ObjectTy Obj = Objects[OA.globalPtrToObjIdx(GlobalPtr) - ObjIdxOffset];
+    ReplayObjectTy Obj =
+        Objects[OA.globalPtrToObjIdx(GlobalPtr) - ObjIdxOffset];
     intptr_t Offset = OA.getOffsetFromObjBasePtr(LocalPtr);
     VoidPtrTy RealPtr = Obj.Start - Obj.OutputOffset + Offset;
     *PtrLoc = RealPtr;

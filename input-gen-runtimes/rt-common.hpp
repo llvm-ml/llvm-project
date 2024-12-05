@@ -4,6 +4,11 @@
 #include <cstdint>
 #include <fstream>
 #include <iostream>
+#include <set>
+
+#include <assert.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include "../llvm/include/llvm/Transforms/IPO/InputGenerationTypes.h"
 
@@ -79,6 +84,17 @@ template <typename T> static void writeV(std::ofstream &Output, T El) {
 }
 
 struct ObjectAddressing {
+  virtual VoidPtrTy getObjBasePtr() const = 0;
+  intptr_t getOffsetFromObjBasePtr(VoidPtrTy Ptr) const {
+    return Ptr - getObjBasePtr();
+  }
+  virtual VoidPtrTy getLowestObjPtr() const = 0;
+  virtual uintptr_t getMaxObjectSize() const = 0;
+  virtual ~ObjectAddressing(){};
+};
+
+struct InputGenObjectAddressing : public ObjectAddressing {
+  ~InputGenObjectAddressing(){};
   size_t globalPtrToObjIdx(VoidPtrTy GlobalPtr) const {
     size_t Idx =
         (reinterpret_cast<intptr_t>(GlobalPtr) & ObjIdxMask) / MaxObjectSize;
@@ -90,12 +106,8 @@ struct ObjectAddressing {
                                        PtrInObjMask);
   }
 
-  VoidPtrTy getObjBasePtr() const {
+  VoidPtrTy getObjBasePtr() const override {
     return reinterpret_cast<VoidPtrTy>(MaxObjectSize / 2);
-  }
-
-  intptr_t getOffsetFromObjBasePtr(VoidPtrTy Ptr) const {
-    return Ptr - getObjBasePtr();
   }
 
   VoidPtrTy localPtrToGlobalPtr(size_t ObjIdx, VoidPtrTy PtrInObj) const {
@@ -103,7 +115,9 @@ struct ObjectAddressing {
                                        reinterpret_cast<intptr_t>(PtrInObj));
   }
 
-  VoidPtrTy getLowestObjPtr() const { return nullptr; }
+  uintptr_t getMaxObjectSize() const override { return MaxObjectSize; }
+
+  VoidPtrTy getLowestObjPtr() const override { return nullptr; }
 
   intptr_t PtrInObjMask;
   intptr_t ObjIdxMask;
@@ -202,10 +216,17 @@ static VoidPtrTy advance(VoidPtrTy Ptr, uint64_t Bytes) {
 struct ObjectTy {
   const ObjectAddressing &OA;
   ObjectTy(size_t Idx, const ObjectAddressing &OA, VoidPtrTy Output,
+           size_t Size)
+      : OA(OA), KnownSizeObjBundle(false), Idx(Idx) {
+    this->Output.Memory = Output;
+    this->Output.AllocationSize = Size;
+    this->Output.AllocationOffset = 0;
+  }
+  ObjectTy(size_t Idx, const ObjectAddressing &OA, VoidPtrTy Output,
            bool KnownSizeObjBundle = false)
       : OA(OA), KnownSizeObjBundle(KnownSizeObjBundle), Idx(Idx) {
     this->Output.Memory = Output;
-    this->Output.AllocationSize = OA.MaxObjectSize;
+    this->Output.AllocationSize = OA.getMaxObjectSize();
     this->Output.AllocationOffset = OA.getOffsetFromObjBasePtr(nullptr);
 
     if (KnownSizeObjBundle)
@@ -226,12 +247,26 @@ struct ObjectTy {
   bool KnownSizeObjBundle;
   VoidPtrTy CurrentStaticObjEnd;
 
+  size_t getIdx() { return Idx; }
+
+  // FIXME maybe this logic should be in ObjectAddressing
+  VoidPtrTy getLocalPtr(VoidPtrTy GlobalPtr) {
+    VoidPtrTy BasePtr = Output.Memory - Output.AllocationOffset;
+    return GlobalPtr - reinterpret_cast<uintptr_t>(BasePtr);
+  }
+
+  bool isGlobalPtrInObject(VoidPtrTy GlobalPtr) {
+    VoidPtrTy BasePtr = Output.Memory - Output.AllocationOffset;
+    return BasePtr <= GlobalPtr && BasePtr + Output.AllocationSize > GlobalPtr;
+  }
+
   VoidPtrTy addKnownSizeObject(uintptr_t Size) {
     assert(KnownSizeObjBundle);
     // Make sure zero-sized objects have their own address
     if (Size == 0)
       Size = 1;
-    if (Size + CurrentStaticObjEnd > OA.getLowestObjPtr() + OA.MaxObjectSize)
+    if (Size + CurrentStaticObjEnd >
+        OA.getLowestObjPtr() + OA.getMaxObjectSize())
       return nullptr;
     VoidPtrTy ObjPtr = CurrentStaticObjEnd;
     CurrentStaticObjEnd = alignEnd(CurrentStaticObjEnd + Size, ObjAlignment);
@@ -290,7 +325,7 @@ struct ObjectTy {
   }
 
   template <typename T>
-  T read(VoidPtrTy Ptr, uint32_t Size, BranchHint *BHs, int32_t BHSize);
+  void read(VoidPtrTy Ptr, uint32_t Size, BranchHint *BHs, int32_t BHSize);
 
   template <typename T> void write(T Val, VoidPtrTy Ptr, uint32_t Size) {
     intptr_t Offset = OA.getOffsetFromObjBasePtr(Ptr);
@@ -303,7 +338,7 @@ struct ObjectTy {
   void setFunctionPtrIdx(VoidPtrTy Ptr, uint32_t Size, VoidPtrTy FPtr,
                          uint32_t FIdx) {
     intptr_t Offset = OA.getOffsetFromObjBasePtr(Ptr);
-    storeGeneratedValue(FPtr, Offset, Size);
+    storeInputValue(FPtr, Offset, Size);
     FPtrs.insert({Offset, FIdx});
   }
 
@@ -311,7 +346,7 @@ struct ObjectTy {
   std::set<intptr_t> Ptrs;
   std::unordered_map<intptr_t, uint32_t> FPtrs;
 
-private:
+public:
   struct Memory {
     VoidPtrTy Memory = nullptr;
     intptr_t AllocationSize = 0;
@@ -384,6 +419,8 @@ private:
       AllocationOffset = NewAllocationOffset;
     }
   };
+
+private:
   Memory Output, Input, Used;
 
   struct Limits {
@@ -423,7 +460,7 @@ private:
   }
 
   template <typename T>
-  void storeGeneratedValue(T Val, intptr_t Offset, uint32_t Size) {
+  void storeInputValue(T Val, intptr_t Offset, uint32_t Size) {
     assert(Size == sizeof(Val));
 
     // Only assign the bytes that were uninitialized
