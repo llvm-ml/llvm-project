@@ -398,7 +398,10 @@ struct InputRecordRTTy {
   }
 
   bool Recording = false;
+  bool Done = false;
   void recordPush() {
+    if (Done)
+      return;
     if (Recording) {
       std::cerr << "Nested recording! Abort!" << std::endl;
       abort();
@@ -407,6 +410,8 @@ struct InputRecordRTTy {
     Recording = true;
   }
   void recordPop() {
+    if (Done)
+      return;
     if (!Recording) {
       std::cerr << "Pop without push? Abort!" << std::endl;
       abort();
@@ -414,6 +419,7 @@ struct InputRecordRTTy {
     INPUTGEN_DEBUG(std::cout << "Stop recording\n");
     Recording = false;
     report();
+    Done = true;
   }
 };
 

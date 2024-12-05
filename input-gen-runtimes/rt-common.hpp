@@ -1,5 +1,5 @@
-#ifndef _INPUT_GEN_RUNTIMES_RT_H_
-#define _INPUT_GEN_RUNTIMES_RT_H_
+#ifndef _INPUT_GEN_RUNTIMES_RT_COMMON_H_
+#define _INPUT_GEN_RUNTIMES_RT_COMMON_H_
 
 #include <cstdint>
 #include <fstream>
@@ -518,4 +518,4 @@ template <typename T> static GenValTy toGenValTy(T A, int32_t IsPtr) {
   return U;
 }
 
-#endif // _INPUT_GEN_RUNTIMES_RT_H_
+#endif // _INPUT_GEN_RUNTIMES_RT_COMMON_H_
