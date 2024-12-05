@@ -886,9 +886,6 @@ static void addNewRetryInfo(std::unique_ptr<RetryInfoTy> &&NewRetryInfo) {
 }
 
 int main(int argc, char **argv) {
-  VERBOSE = (bool)getenv("VERBOSE");
-  TIMING = (bool)getenv("TIMING");
-
   uint8_t Tmp;
   VoidPtrTy StackPtr = &Tmp;
   INPUTGEN_DEBUG(std::cerr << "Stack pointer: " << (void *)StackPtr

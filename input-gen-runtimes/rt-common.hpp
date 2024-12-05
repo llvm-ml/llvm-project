@@ -10,8 +10,14 @@
 using BranchHint = llvm::inputgen::BranchHint;
 
 namespace {
-int VERBOSE = 1;
+int VERBOSE = 0;
 int TIMING = 0;
+struct InitGlobalsTy {
+  InitGlobalsTy() {
+    VERBOSE = (bool)getenv("VERBOSE");
+    TIMING = (bool)getenv("TIMING");
+  }
+} InitGlobals;
 } // namespace
 
 #ifndef NDEBUG
