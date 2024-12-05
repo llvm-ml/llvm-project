@@ -368,7 +368,7 @@ public:
       intptr_t AllocatedMemoryEndOffset =
           AllocatedMemoryStartOffset + AllocationSize;
       return (AllocatedMemoryStartOffset <= Offset &&
-              AllocatedMemoryEndOffset > Offset + Size);
+              AllocatedMemoryEndOffset >= Offset + Size);
     }
 
     /// Returns true if it was already allocated
