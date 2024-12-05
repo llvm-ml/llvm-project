@@ -4,11 +4,11 @@
 template <typename RTTy>
 static void dumpInput(std::ofstream &InputOut, RTTy &RT) {
   INPUTGEN_DEBUG({
-    printf("Args (%u total)\n", RT.NumArgs);
+    fprintf(stderr, "Args (%u total)\n", RT.NumArgs);
     for (size_t I = 0; I < RT.NumArgs; ++I)
-      printf("Arg %zu: %p\n", I, (void *)RT.GenVals[I].Content);
-    printf("Num new values: %lu\n", RT.NumNewValues);
-    printf("Objects (%zu total)\n", RT.Objects.size());
+      fprintf(stderr, "Arg %zu: %p\n", I, (void *)RT.GenVals[I].Content);
+    fprintf(stderr, "Num new values: %lu\n", RT.NumNewValues);
+    fprintf(stderr, "Objects (%zu total)\n", RT.Objects.size());
   });
 
   writeV<uintptr_t>(InputOut, RT.OA.getSize());
@@ -22,13 +22,14 @@ static void dumpInput(std::ofstream &InputOut, RTTy &RT) {
 
   uint32_t NumObjects = RT.Objects.size();
   writeV(InputOut, NumObjects);
-  INPUTGEN_DEBUG(printf("Num Obj %u\n", NumObjects));
+  INPUTGEN_DEBUG(fprintf(stderr, "Num Obj %u\n", NumObjects));
 
   IRVector<ObjectTy::AlignedMemoryChunk> MemoryChunks;
   uintptr_t I = 0;
   for (auto &Obj : RT.Objects) {
     auto MemoryChunk = Obj->getAlignedInputMemory();
-    INPUTGEN_DEBUG(printf(
+    INPUTGEN_DEBUG(fprintf(
+        stderr,
         "Obj #%zu aligned memory chunk at %p, input size %lu "
         "offset %ld, output size %lu offset %ld, cmp size %lu offset %ld\n",
         Obj->Idx, (void *)MemoryChunk.Ptr, MemoryChunk.InputSize,
@@ -50,7 +51,7 @@ static void dumpInput(std::ofstream &InputOut, RTTy &RT) {
     I++;
   }
 
-  INPUTGEN_DEBUG(printf("TotalSize %lu\n", TotalSize));
+  INPUTGEN_DEBUG(fprintf(stderr, "TotalSize %lu\n", TotalSize));
   auto BeforeNumGlobals = InputOut.tellp();
   InputOut.seekp(BeforeTotalSize);
   writeV(InputOut, TotalSize);
@@ -58,7 +59,7 @@ static void dumpInput(std::ofstream &InputOut, RTTy &RT) {
 
   uint32_t NumGlobals = RT.Globals.size();
   writeV(InputOut, NumGlobals);
-  INPUTGEN_DEBUG(printf("Num Glob %u\n", NumGlobals));
+  INPUTGEN_DEBUG(fprintf(stderr, "Num Glob %u\n", NumGlobals));
 
   for (uint32_t I = 0; I < NumGlobals; ++I) {
     auto InputMem =
@@ -69,30 +70,34 @@ static void dumpInput(std::ofstream &InputOut, RTTy &RT) {
     writeV<VoidPtrTy>(InputOut, RT.Globals[I].Ptr);
     writeV<VoidPtrTy>(InputOut, InputStart);
     writeV<uintptr_t>(InputOut, InputMem.Size);
-    INPUTGEN_DEBUG(printf("Glob %u %p in Obj #%zu input start %p size %zu\n", I,
-                          (void *)RT.Globals[I].Ptr, RT.Globals[I].ObjIdx,
-                          (void *)InputStart, InputMem.Size));
+    INPUTGEN_DEBUG(fprintf(stderr,
+                           "Glob %u %p in Obj #%zu input start %p size %zu\n",
+                           I, (void *)RT.Globals[I].Ptr, RT.Globals[I].ObjIdx,
+                           (void *)InputStart, InputMem.Size));
   }
 
   I = 0;
   for (auto &Obj : RT.Objects) {
     writeV<intptr_t>(InputOut, Obj->Idx);
     writeV<uintptr_t>(InputOut, Obj->Ptrs.size());
-    INPUTGEN_DEBUG(printf("O #%ld NP %ld\n", Obj->Idx, Obj->Ptrs.size()));
+    INPUTGEN_DEBUG(
+        fprintf(stderr, "O #%ld NP %ld\n", Obj->Idx, Obj->Ptrs.size()));
     for (auto Ptr : Obj->Ptrs) {
       writeV<intptr_t>(InputOut, Ptr);
-      INPUTGEN_DEBUG(printf("P at %ld : %p\n", Ptr,
-                            *reinterpret_cast<void **>(
-                                MemoryChunks[Obj->Idx].Ptr +
-                                MemoryChunks[Obj->Idx].InputOffset + Ptr)));
+      INPUTGEN_DEBUG(fprintf(stderr, "P at %ld : %p\n", Ptr,
+                             *reinterpret_cast<void **>(
+                                 MemoryChunks[Obj->Idx].Ptr +
+                                 MemoryChunks[Obj->Idx].InputOffset + Ptr)));
     }
 
     writeV<uintptr_t>(InputOut, Obj->FPtrs.size());
-    INPUTGEN_DEBUG(printf("O #%ld NFP %ld\n", Obj->Idx, Obj->FPtrs.size()));
+    INPUTGEN_DEBUG(
+        fprintf(stderr, "O #%ld NFP %ld\n", Obj->Idx, Obj->FPtrs.size()));
     for (auto Ptr : Obj->FPtrs) {
       writeV<intptr_t>(InputOut, Ptr.first);
       writeV<uint32_t>(InputOut, Ptr.second);
-      INPUTGEN_DEBUG(printf("FP at %ld : %u\n", Ptr.first, Ptr.second));
+      INPUTGEN_DEBUG(
+          fprintf(stderr, "FP at %ld : %u\n", Ptr.first, Ptr.second));
     }
 
     assert(Obj->Idx == I);
@@ -100,18 +105,20 @@ static void dumpInput(std::ofstream &InputOut, RTTy &RT) {
   }
 
   uint32_t NumGenVals = RT.GenVals.size();
-  INPUTGEN_DEBUG(printf("Num GenVals %u\n", NumGenVals));
-  INPUTGEN_DEBUG(printf("Num Args %u\n", RT.NumArgs));
+  INPUTGEN_DEBUG(fprintf(stderr, "Num GenVals %u\n", NumGenVals));
+  INPUTGEN_DEBUG(fprintf(stderr, "Num Args %u\n", RT.NumArgs));
   writeV<uint32_t>(InputOut, NumGenVals);
   writeV<uint32_t>(InputOut, RT.NumArgs);
   I = 0;
   for (auto &GenVal : RT.GenVals) {
-    INPUTGEN_DEBUG(printf("GenVal #%ld isPtr %d\n", I, GenVal.IsPtr));
-    INPUTGEN_DEBUG(printf("Content "));
-    for (unsigned J = 0; J < sizeof(GenVal.Content); J++) {
-      INPUTGEN_DEBUG(printf("%d ", (int)GenVal.Content[J]));
-    }
-    INPUTGEN_DEBUG(printf("\n"));
+    INPUTGEN_DEBUG(fprintf(stderr, "GenVal #%ld isPtr %d\n", I, GenVal.IsPtr));
+    INPUTGEN_DEBUG(fprintf(stderr, "Content "));
+    std::ios_base::fmtflags FF(std::cerr.flags());
+    std::cerr << std::hex << std::setfill('0') << std::setw(2);
+    for (unsigned J = 0; J < sizeof(GenVal.Content); J++)
+      std::cerr << std::setw(2) << (int)GenVal.Content[J] << " ";
+    std::cerr.flags(FF);
+    INPUTGEN_DEBUG(fprintf(stderr, "\n"));
     static_assert(sizeof(GenVal.Content) == MaxPrimitiveTypeSize);
     InputOut.write(ccast(GenVal.Content), MaxPrimitiveTypeSize);
     writeV<int32_t>(InputOut, GenVal.IsPtr);
