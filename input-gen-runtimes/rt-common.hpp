@@ -5,6 +5,7 @@
 #include <fstream>
 #include <iostream>
 #include <set>
+#include <unordered_map>
 
 #include <assert.h>
 #include <stdlib.h>

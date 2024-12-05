@@ -202,7 +202,8 @@ struct InputRecordRTTy {
     // FIXME need globals and stack handling
     assert(Res);
     auto [Obj, LocalPtr] = *Res;
-    INPUTGEN_DEBUG(std::cerr << "write to obj #" << Obj->getIdx() << "\n");
+    INPUTGEN_DEBUG(std::cerr << "Write to obj #" << Obj->getIdx()
+                             << " with size " << Size << "\n");
     if (Obj)
       Obj->write<T>(Val, LocalPtr, Size);
   }
@@ -217,7 +218,8 @@ struct InputRecordRTTy {
     // FIXME need globals and stack handling
     assert(Res);
     auto [Obj, LocalPtr] = *Res;
-    INPUTGEN_DEBUG(std::cerr << "read from obj #" << Obj->getIdx() << "\n");
+    INPUTGEN_DEBUG(std::cerr << "read from obj #" << Obj->getIdx()
+                             << " with size " << Size << "\n");
     if (Obj)
       Obj->read<T>(LocalPtr, Size, BHs, BHSize);
   }
