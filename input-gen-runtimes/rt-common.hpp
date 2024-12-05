@@ -215,18 +215,24 @@ static VoidPtrTy advance(VoidPtrTy Ptr, uint64_t Bytes) {
   return reinterpret_cast<uint8_t *>(Ptr) + Bytes;
 }
 
+using MallocFuncTy = void *(*)(size_t);
+using FreeFuncTy = void (*)(void *);
+
 struct ObjectTy {
   const ObjectAddressing &OA;
-  ObjectTy(size_t Idx, const ObjectAddressing &OA, VoidPtrTy Output,
-           size_t Size)
-      : OA(OA), KnownSizeObjBundle(false), Idx(Idx) {
+  ObjectTy(MallocFuncTy Malloc, FreeFuncTy Free, size_t Idx,
+           const ObjectAddressing &OA, VoidPtrTy Output, size_t Size)
+      : OA(OA), KnownSizeObjBundle(false), Idx(Idx), Output(Malloc, Free),
+        Input(Malloc, Free), Used(Malloc, Free) {
     this->Output.Memory = Output;
     this->Output.AllocationSize = Size;
     this->Output.AllocationOffset = 0;
   }
-  ObjectTy(size_t Idx, const ObjectAddressing &OA, VoidPtrTy Output,
+  ObjectTy(MallocFuncTy Malloc, FreeFuncTy Free, size_t Idx,
+           const ObjectAddressing &OA, VoidPtrTy Output,
            bool KnownSizeObjBundle = false)
-      : OA(OA), KnownSizeObjBundle(KnownSizeObjBundle), Idx(Idx) {
+      : OA(OA), KnownSizeObjBundle(KnownSizeObjBundle), Idx(Idx),
+        Output(Malloc, Free), Input(Malloc, Free), Used(Malloc, Free) {
     this->Output.Memory = Output;
     this->Output.AllocationSize = OA.getMaxObjectSize();
     this->Output.AllocationOffset = OA.getOffsetFromObjBasePtr(nullptr);
@@ -349,7 +355,11 @@ struct ObjectTy {
   std::unordered_map<intptr_t, uint32_t> FPtrs;
 
 public:
-  struct Memory {
+  struct MemoryTy {
+    MallocFuncTy Malloc;
+    FreeFuncTy Free;
+    MemoryTy(MallocFuncTy Malloc, FreeFuncTy Free)
+        : Malloc(Malloc), Free(Free) {}
     VoidPtrTy Memory = nullptr;
     intptr_t AllocationSize = 0;
     intptr_t AllocationOffset = 0;
@@ -372,10 +382,11 @@ public:
     template <typename T>
     void extendMemory(T *&OldMemory, intptr_t NewAllocationSize,
                       intptr_t NewAllocationOffset) {
-      T *NewMemory = reinterpret_cast<T *>(calloc(NewAllocationSize, 1));
+      T *NewMemory = reinterpret_cast<T *>(Malloc(NewAllocationSize));
+      memset(NewMemory, 0, NewAllocationSize);
       memcpy(advance(NewMemory, AllocationOffset - NewAllocationOffset),
              OldMemory, AllocationSize);
-      free(OldMemory);
+      Free(OldMemory);
       OldMemory = NewMemory;
     };
 
@@ -423,7 +434,7 @@ public:
   };
 
 private:
-  Memory Output, Input, Used;
+  MemoryTy Output, Input, Used;
 
   struct Limits {
     bool Initialized = false;

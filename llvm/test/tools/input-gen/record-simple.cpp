@@ -22,7 +22,8 @@ extern "C" int foo(int *a, int *b, int *c, int n) {
 int main() {
   int *a = (int *)malloc(N * sizeof(*a));
   int *b = (int *)malloc(N * sizeof(*b));
-  int *c = (int *)alloca(N * sizeof(*c));
+  //int *c = (int *)alloca(N * sizeof(*c));
+  int *c = (int *)malloc(N * sizeof(*c));
 
   for (int i = 0; i < N; i++) {
     a[i] = b[i] = i % 10;
@@ -30,5 +31,9 @@ int main() {
 
   int d = foo(a, b, c, N);
   printf("Output: %d\n", d);
+
+  free(a);
+  free(b);
+  free(c);
   return 0;
 }

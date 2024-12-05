@@ -83,15 +83,6 @@ struct InputRecordConfTy {
   InputRecordConfTy() {}
 };
 
-struct StaticSizeObjectTy {
-  StaticSizeObjectTy(size_t Idx, VoidPtrTy Output, size_t Size) {
-    this->Output.Memory = Output;
-    this->Output.AllocationSize = Size;
-    this->Output.AllocationOffset = 0;
-  }
-  ObjectTy::Memory Output, Input, Used;
-};
-
 struct InputRecordRTTy {
 
   struct InputRecordObjectAddressing : public ObjectAddressing {
@@ -226,7 +217,7 @@ struct InputRecordRTTy {
     // FIXME need globals and stack handling
     assert(Res);
     auto [Obj, LocalPtr] = *Res;
-    INPUTGEN_DEBUG(std::cerr << "write to obj #" << Obj->getIdx() << "\n");
+    INPUTGEN_DEBUG(std::cerr << "read from obj #" << Obj->getIdx() << "\n");
     if (Obj)
       Obj->read<T>(LocalPtr, Size, BHs, BHSize);
   }
@@ -236,10 +227,11 @@ struct InputRecordRTTy {
   }
 
   void atMalloc(VoidPtrTy Ptr, size_t Size) {
-    INPUTGEN_DEBUG(std::cerr << "Malloc " << toVoidPtr(Ptr) << " Size " << Size
-                             << std::endl);
     size_t Idx = Objects.size();
-    Objects.push_back(IRMakeUnique<ObjectTy>(Idx, OA, Ptr, Size));
+    INPUTGEN_DEBUG(std::cerr << "Malloc " << toVoidPtr(Ptr) << " Size " << Size
+                             << " -> Obj #" << Idx << std::endl);
+    Objects.push_back(
+        IRMakeUnique<ObjectTy>(RealMalloc, RealFree, Idx, OA, Ptr, Size));
   }
 
   void registerGlobal(VoidPtrTy, VoidPtrTy *ReplGlobal, int32_t GlobalSize) {
@@ -473,6 +465,14 @@ void free(void *Ptr) {
   if (isRTInitialized())
     getInputRecordRT().atFree(reinterpret_cast<VoidPtrTy>(Ptr));
   LRealFree(Ptr);
+}
+
+// We need to run this before all other code that may use malloc or free, so
+// priority is set to 101. 0-100 are reserved apparently.
+__attribute__((constructor(101))) static void hijackMallocAndFree() {
+  RealMalloc =
+      reinterpret_cast<decltype(RealMalloc)>(dlsym(RTLD_NEXT, "malloc"));
+  RealFree = reinterpret_cast<decltype(RealFree)>(dlsym(RTLD_NEXT, "free"));
 }
 
 extern "C" {

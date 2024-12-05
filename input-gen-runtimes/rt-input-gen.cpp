@@ -789,13 +789,11 @@ void ObjectTy::read(VoidPtrTy Ptr, uint32_t Size, BranchHint *BHs,
   Used.ensureAllocation(Offset, Size);
   Input.ensureAllocation(Offset, Size);
 
-  T *OutputLoc = reinterpret_cast<T *>(
-      advance(Output.Memory, -Output.AllocationOffset + Offset));
   if (allUsed(Offset, Size))
-    return *OutputLoc;
+    return;
 
   if constexpr (std::is_same<T, FunctionPtrTy>::value)
-    return nullptr;
+    return;
 
   T Val = getInputGenRT().getNewValue<T>(BHs, BHSize);
   storeInputValue(Val, Offset, Size);
@@ -803,7 +801,7 @@ void ObjectTy::read(VoidPtrTy Ptr, uint32_t Size, BranchHint *BHs,
   if constexpr (std::is_pointer<T>::value)
     Ptrs.insert(Offset);
 
-  return *OutputLoc;
+  return;
 }
 
 extern "C" {
