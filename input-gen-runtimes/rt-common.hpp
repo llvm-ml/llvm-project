@@ -122,6 +122,8 @@ struct InputGenObjectAddressing : public ObjectAddressing {
 
   VoidPtrTy getLowestObjPtr() const override { return nullptr; }
 
+  uintptr_t getSize() { return Size; };
+
   intptr_t PtrInObjMask;
   intptr_t ObjIdxMask;
   uintptr_t MaxObjectSize;
@@ -258,14 +260,19 @@ struct ObjectTy {
 
   size_t getIdx() { return Idx; }
 
+  VoidPtrTy getBasePtr() { return Output.Memory - Output.AllocationOffset; }
+
   // FIXME maybe this logic should be in ObjectAddressing
   VoidPtrTy getLocalPtr(VoidPtrTy GlobalPtr) {
-    VoidPtrTy BasePtr = Output.Memory - Output.AllocationOffset;
-    return GlobalPtr - reinterpret_cast<uintptr_t>(BasePtr);
+    return GlobalPtr - reinterpret_cast<uintptr_t>(getBasePtr());
+  }
+
+  VoidPtrTy getGlobalPtr(VoidPtrTy LocalPtr) {
+    return getBasePtr() + reinterpret_cast<uintptr_t>(LocalPtr);
   }
 
   bool isGlobalPtrInObject(VoidPtrTy GlobalPtr) {
-    VoidPtrTy BasePtr = Output.Memory - Output.AllocationOffset;
+    VoidPtrTy BasePtr = getBasePtr();
     return BasePtr <= GlobalPtr && BasePtr + Output.AllocationSize > GlobalPtr;
   }
 

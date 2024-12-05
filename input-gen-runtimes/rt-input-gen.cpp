@@ -664,7 +664,7 @@ struct InputGenRTTy {
       printf("Objects (%zu total)\n", Objects.size());
     });
 
-    writeV<uintptr_t>(InputOut, OA.Size);
+    writeV<uintptr_t>(InputOut, OA.getSize());
     writeV<uintptr_t>(InputOut, OutputObjIdxOffset);
     writeV<uint32_t>(InputOut, SeedStub);
 

@@ -80,7 +80,14 @@ std::unique_ptr<T> IRMakeUnique(_Args &&...Args) {
 }
 
 struct InputRecordConfTy {
-  InputRecordConfTy() {}
+  IRString InputOutName;
+  InputRecordConfTy() {
+    if (char *Str = getenv("INPUT_RECORD_FILENAME"))
+      InputOutName = Str;
+    else
+      // FIXME
+      InputOutName = "/dev/null";
+  }
 };
 
 struct InputRecordRTTy {
@@ -92,16 +99,26 @@ struct InputRecordRTTy {
 
     InputRecordRTTy &RT;
     InputRecordObjectAddressing(InputRecordRTTy &RT) : RT(RT) {}
+
+    VoidPtrTy globalPtrToLocalPtr(VoidPtrTy GlobalPtr) const {
+      auto Res = RT.globalPtrToObjAndLocalPtr(GlobalPtr);
+      assert(Res);
+      return Res->second;
+    }
+    VoidPtrTy localPtrToGlobalPtr(size_t ObjIdx, VoidPtrTy PtrInObj) const {
+      return RT.Objects[ObjIdx]->getGlobalPtr(PtrInObj);
+    }
+
+    uintptr_t getSize() { return std::numeric_limits<uintptr_t>::max(); };
   };
   friend struct InputRecordObjectAddressing;
 
-  InputRecordRTTy(InputRecordConfTy InputGenConf)
-      : InputGenConf(InputGenConf), OA(*this) {
+  InputRecordRTTy(InputRecordConfTy Conf) : Conf(Conf), OA(*this) {
     OutputObjIdxOffset = 0;
   }
   ~InputRecordRTTy() {}
 
-  InputRecordConfTy InputGenConf;
+  InputRecordConfTy Conf;
 
   VoidPtrTy StackPtr;
   intptr_t OutputObjIdxOffset;
@@ -253,22 +270,10 @@ struct InputRecordRTTy {
 
   intptr_t registerFunctionPtrIdx(size_t N) { abort(); }
 
-#if 0
   void report() {
-    if (OutputDir == "-") {
-      // TODO cross platform
-      std::ofstream Null("/dev/null");
-      report(Null);
-    } else {
-      auto FileName = ExecPath.filename().string();
-      IRString ReportOutName(OutputDir + "/" + FileName + ".report." +
-                                FuncIdent + ".txt");
-      IRString InputOutName(OutputDir + "/" + FileName + ".input." +
-                               FuncIdent + ".bin");
-      std::ofstream InputOutStream(InputOutName,
-                                   std::ios::out | std::ios::binary);
-      report(InputOutStream);
-    }
+    std::ofstream InputOutStream(Conf.InputOutName.c_str(),
+                                 std::ios::out | std::ios::binary);
+    report(InputOutStream);
   }
 
   void report(std::ofstream &InputOut) {
@@ -280,7 +285,7 @@ struct InputRecordRTTy {
       printf("Objects (%zu total)\n", Objects.size());
     });
 
-    writeV<uintptr_t>(InputOut, OA.Size);
+    writeV<uintptr_t>(InputOut, OA.getSize());
     writeV<uintptr_t>(InputOut, OutputObjIdxOffset);
     int32_t SeedStub = 0;
     writeV<uint32_t>(InputOut, SeedStub);
@@ -391,7 +396,6 @@ struct InputRecordRTTy {
       writeV<intptr_t>(InputOut, FPOffset);
     }
   }
-#endif
 
   bool Recording = false;
   void recordPush() {
@@ -409,6 +413,7 @@ struct InputRecordRTTy {
     }
     INPUTGEN_DEBUG(std::cout << "Stop recording\n");
     Recording = false;
+    report();
   }
 };
 
@@ -470,7 +475,9 @@ void free(void *Ptr) {
 }
 
 // We need to run this before all other code that may use malloc or free, so
-// priority is set to 101. 0-100 are reserved apparently.
+// priority is set to 101. 0-100 are reserved apparently. Even with 101 priority
+// we get some malloc before we can get the RealMalloc which is why there is
+// code for that in malloc() as well.
 __attribute__((constructor(101))) static void hijackMallocAndFree() {
   RealMalloc =
       reinterpret_cast<decltype(RealMalloc)>(dlsym(RTLD_NEXT, "malloc"));
