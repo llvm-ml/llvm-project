@@ -244,6 +244,10 @@ struct InputRecordRTTy {
       Obj->read<T>(LocalPtr, Size, BHs, BHSize);
   }
 
+  // TODO need to think what happens when we free some memory and subsequently
+  // the _same_ location is allocated (with different size for example) Also do
+  // we need a hijacked fake `free` function in the replay so that we dont crash
+  // when trying to free a non-freeable object?
   void atFree(VoidPtrTy Ptr) {
     INPUTGEN_DEBUG(std::cerr << "Free " << toVoidPtr(Ptr) << std::endl);
   }

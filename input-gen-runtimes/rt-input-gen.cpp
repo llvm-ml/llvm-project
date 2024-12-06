@@ -242,8 +242,9 @@ struct InputGenRTTy {
         abort();
       }
     }
-    Objects.push_back(std::make_unique<ObjectTy>(
-        Idx, OA, OutputMem.AlignedMemory + Idx * OA.MaxObjectSize));
+    Objects.push_back(std::make_unique<ObjectTy>(malloc, free, Idx, OA,
+                                                 OutputMem.AlignedMemory +
+                                                     Idx * OA.MaxObjectSize));
     VoidPtrTy OutputPtr =
         OA.localPtrToGlobalPtr(Idx + OutputObjIdxOffset, OA.getObjBasePtr());
     INPUTGEN_DEBUG(
@@ -262,7 +263,7 @@ struct InputGenRTTy {
     }
     size_t Idx = Objects.size();
     Objects.push_back(std::make_unique<ObjectTy>(
-        Idx, OA, OutputMem.AlignedMemory + Idx * OA.MaxObjectSize,
+        malloc, free, Idx, OA, OutputMem.AlignedMemory + Idx * OA.MaxObjectSize,
         /*KnownSizeObjBundle=*/true));
     VoidPtrTy LocalPtr = Objects.back()->addKnownSizeObject(Size);
     GlobalBundleObjects.push_back(Idx);
@@ -370,9 +371,7 @@ struct InputGenRTTy {
     return V;
   }
 
-  template <typename T> void recordArg(T Val) {
-    llvm_unreachable("Record in input gen?");
-  }
+  template <typename T> void recordArg(T Val) { abort(); }
 
   template <typename T>
   T generateNewStubReturn(BranchHint *BHs, int32_t BHSize) {
@@ -597,12 +596,13 @@ struct InputGenRTTy {
   }
 
   template <typename T>
-  void read(VoidPtrTy Ptr, VoidPtrTy Base, uint32_t Size, BranchHint *BHs,
-            int32_t BHSize) {
+  T read(VoidPtrTy Ptr, VoidPtrTy Base, uint32_t Size, BranchHint *BHs,
+         int32_t BHSize) {
     assert(Ptr);
     ObjectTy *Obj = globalPtrToObj(Ptr);
     if (Obj)
-      Obj->read<T>(OA.globalPtrToLocalPtr(Ptr), Size, BHs, BHSize);
+      return Obj->read<T>(OA.globalPtrToLocalPtr(Ptr), Size, BHs, BHSize);
+    return *reinterpret_cast<T *>(Ptr);
   }
 
   void registerGlobal(VoidPtrTy, VoidPtrTy *ReplGlobal, int32_t GlobalSize) {
@@ -782,18 +782,20 @@ static InputGenRTTy *InputGenRT;
 static InputGenRTTy &getInputGenRT() { return *InputGenRT; }
 
 template <typename T>
-void ObjectTy::read(VoidPtrTy Ptr, uint32_t Size, BranchHint *BHs,
-                    int32_t BHSize) {
+T ObjectTy::read(VoidPtrTy Ptr, uint32_t Size, BranchHint *BHs,
+                 int32_t BHSize) {
   intptr_t Offset = OA.getOffsetFromObjBasePtr(Ptr);
   assert(Output.isAllocated(Offset, Size));
   Used.ensureAllocation(Offset, Size);
   Input.ensureAllocation(Offset, Size);
 
+  T *OutputLoc = reinterpret_cast<T *>(
+      advance(Output.Memory, -Output.AllocationOffset + Offset));
   if (allUsed(Offset, Size))
-    return;
+    return *OutputLoc;
 
   if constexpr (std::is_same<T, FunctionPtrTy>::value)
-    return;
+    return nullptr;
 
   T Val = getInputGenRT().getNewValue<T>(BHs, BHSize);
   storeInputValue(Val, Offset, Size);
@@ -801,7 +803,7 @@ void ObjectTy::read(VoidPtrTy Ptr, uint32_t Size, BranchHint *BHs,
   if constexpr (std::is_pointer<T>::value)
     Ptrs.insert(Offset);
 
-  return;
+  return *OutputLoc;
 }
 
 extern "C" {

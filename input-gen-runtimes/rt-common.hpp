@@ -341,7 +341,7 @@ struct ObjectTy {
   }
 
   template <typename T>
-  void read(VoidPtrTy Ptr, uint32_t Size, BranchHint *BHs, int32_t BHSize);
+  T read(VoidPtrTy Ptr, uint32_t Size, BranchHint *BHs, int32_t BHSize);
 
   template <typename T> void write(T Val, VoidPtrTy Ptr, uint32_t Size) {
     intptr_t Offset = OA.getOffsetFromObjBasePtr(Ptr);

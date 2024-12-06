@@ -17,12 +17,8 @@
 #include "rt-common.hpp"
 
 namespace {
-int VERBOSE = 0;
-int TIMING = 0;
-
 INPUTGEN_TIMER_DEFINE(IRInitialization);
 INPUTGEN_TIMER_DEFINE(IRRun);
-
 } // namespace
 
 struct ReplayObjectTy {
@@ -93,7 +89,8 @@ VoidPtrTy __inputgen_select_fp(VoidPtrTy *FPCandidates, uint64_t N) {
 }
 
 #define RW(TY, NAME)                                                           \
-  TY __inputrun_get_##NAME(void *, int32_t) { return getNewValue<TY>(); }
+  TY __inputrun_stub_##NAME(void *, int32_t) { return getNewValue<TY>(); }     \
+  TY __inputrun_arg_##NAME(void *, int32_t) { return getNewValue<TY>(); }
 
 RW(bool, i1)
 RW(char, i8)
@@ -160,6 +157,8 @@ int main(int argc, char **argv) {
   Gen.seed(Seed);
 
   auto MemSize = readV<uint64_t>(Input);
+  // TODO Maybe we should space out allocations so that they are on different
+  // cache lines like they were probably originally.
   char *Memory = ccast(calloc(MemSize, 1));
   INPUTGEN_DEBUG(printf("MemSize %lu : %p\n", MemSize, (void *)Memory));
 
