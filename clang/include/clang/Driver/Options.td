@@ -4073,6 +4073,13 @@ def fno_finite_loops: Flag<["-"], "fno-finite-loops">, Group<f_Group>,
   HelpText<"Do not assume that any loop is finite.">,
   Visibility<[ClangOption, CC1Option]>;
 
+def finstrumentor : Flag<["-"], "finstrumentor">, Group<f_Group>,
+  HelpText<"Enable instrumentation using the Instrumentor">,
+  Visibility<[CC1Option]>;
+def fno_instrumentor : Flag<["-"], "fno-instrumentor">, Group<f_Group>,
+  HelpText<"Disable instrumentation using the Instrumentor">,
+  Visibility<[CC1Option]>;
+
 def ftrigraphs : Flag<["-"], "ftrigraphs">, Group<f_Group>,
   HelpText<"Process trigraph sequences">, Visibility<[ClangOption, CC1Option]>;
 def fno_trigraphs : Flag<["-"], "fno-trigraphs">, Group<f_Group>,

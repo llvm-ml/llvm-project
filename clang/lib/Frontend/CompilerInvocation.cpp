@@ -2330,6 +2330,11 @@ bool CompilerInvocation::ParseCodeGenArgs(CodeGenOptions &Opts, ArgList &Args,
   if (!Opts.EmitIEEENaNCompliantInsts && !LangOptsRef.NoHonorNaNs)
     Diags.Report(diag::err_drv_amdgpu_ieee_without_no_honor_nans);
 
+  if (Args.hasArg(options::OPT_finstrumentor))
+    Opts.Instrumentor = 1;
+  else if (Args.hasArg(options::OPT_fno_instrumentor))
+    Opts.Instrumentor = 0;
+
   return Diags.getNumErrors() == NumErrorsBefore;
 }
 
