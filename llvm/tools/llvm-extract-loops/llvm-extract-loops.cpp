@@ -45,7 +45,9 @@
 
 using namespace llvm;
 
-cl::OptionCategory ExtractLoopsCat("llvm-extract Options");
+#define DEBUG_TYPE "llvm-extract-loops"
+
+cl::OptionCategory ExtractLoopsCat("llvm-extract-loops Options");
 
 // InputFilename - The filename to read from.
 static cl::opt<std::string> InputFilename(cl::Positional,
@@ -188,18 +190,18 @@ int main(int argc, char **argv) {
     DominatorTree DT(*F);
     LoopInfo LI(DT);
 
-    for (Loop *L : LI) {
+    for (Loop *L : LI.getLoopsInPreorder()) {
+      LLVM_DEBUG(L->dump());
       unsigned Depth = L->getLoopDepth();
       llvm::ValueToValueMapTy VMap;
       Function *NewF = CloneFunction(F, VMap);
-      NewF->dump();
       SmallVector<BasicBlock *> BBs;
       for (BasicBlock *BB : L->getBlocks())
         BBs.push_back(cast<BasicBlock>(VMap[BB]));
       std::string Suffix =
           "llvm_extracted_loop." + std::to_string(LoopCounter++);
       auto CE =
-          CodeExtractor(L->getBlocks(), /*DT=*/nullptr, /*AggregateArgs=*/false,
+          CodeExtractor(BBs, /*DT=*/nullptr, /*AggregateArgs=*/false,
                         /*BFI=*/nullptr, /*BPI=*/nullptr, /*AC=*/nullptr,
                         /*AllowVarArgs=*/true, /*AllowAlloca=*/true,
                         /*AllocationBlock=*/nullptr,
