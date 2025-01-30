@@ -55,16 +55,14 @@ static cl::opt<std::string> InputFilename(cl::Positional,
                                           cl::init("-"),
                                           cl::value_desc("filename"));
 
-static cl::opt<std::string>
-    OutputFilenamePrefix("op", cl::desc("Specify output filename prefix"),
-                         cl::value_desc("filename prefix"),
-                         cl::init("llvm_extracted_loop."),
-                         cl::cat(ExtractLoopsCat));
+static cl::opt<std::string> OutputFilenamePrefix(
+    "output-prefix", cl::desc("Specify output filename prefix"),
+    cl::value_desc("filename prefix"), cl::init("llvm_extracted_loop."),
+    cl::cat(ExtractLoopsCat));
 
-static cl::opt<std::string>
-    OutputFilenameSuffix("os", cl::desc("Specify output filename suffix"),
-                         cl::value_desc("filename suffix"), cl::init(""),
-                         cl::cat(ExtractLoopsCat));
+static cl::opt<std::string> OutputFilenameSuffix(
+    "output-suffix", cl::desc("Specify output filename suffix"),
+    cl::value_desc("filename suffix"), cl::init(""), cl::cat(ExtractLoopsCat));
 
 static cl::opt<bool> Force("f", cl::desc("Enable binary output on terminals"),
                            cl::cat(ExtractLoopsCat));
