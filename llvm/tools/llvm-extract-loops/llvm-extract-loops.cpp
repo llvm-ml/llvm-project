@@ -41,6 +41,10 @@
 #include "llvm/Transforms/IPO/GlobalDCE.h"
 #include "llvm/Transforms/IPO/StripDeadPrototypes.h"
 #include "llvm/Transforms/IPO/StripSymbols.h"
+#include "llvm/Transforms/InstCombine/InstCombine.h"
+#include "llvm/Transforms/Scalar/SROA.h"
+#include "llvm/Transforms/Scalar/SimplifyCFG.h"
+#include "llvm/Transforms/Utils/BreakCriticalEdges.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/CodeExtractor.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
@@ -193,6 +197,32 @@ static void writeExtractedModuleInPlace(Module &M, Function &F,
   Out.keep();
 }
 
+void preprocessModule(Module &M) {
+  LoopAnalysisManager LAM;
+  FunctionAnalysisManager FAM;
+  CGSCCAnalysisManager CGAM;
+  ModuleAnalysisManager MAM;
+
+  PassBuilder PB;
+
+  PB.registerModuleAnalyses(MAM);
+  PB.registerCGSCCAnalyses(CGAM);
+  PB.registerFunctionAnalyses(FAM);
+  PB.registerLoopAnalyses(LAM);
+  PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
+
+  ModulePassManager MPM;
+  FunctionPassManager FPM;
+  FPM.addPass(SROAPass(SROAOptions::PreserveCFG));
+  FPM.addPass(InstCombinePass());
+  FPM.addPass(SimplifyCFGPass());
+  // Simplify is needed in order to get dedicated exit blocks in the loops,
+  // which in turn enables outlining.
+  FPM.addPass(LoopSimplifyPass());
+  MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
+  MPM.run(M, MAM);
+}
+
 int main(int argc, char **argv) {
   InitLLVM X(argc, argv);
 
@@ -213,6 +243,9 @@ int main(int argc, char **argv) {
     else
       OutputFilenameSuffix = ".bc";
   }
+
+  preprocessModule(*M);
+  LLVM_DEBUG(llvm::dbgs() << "After preprocessing: \n" << *M << "\n");
 
   SmallVector<Function *> ToHandle;
   for (Function &F : *M)
