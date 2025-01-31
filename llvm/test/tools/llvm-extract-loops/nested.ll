@@ -10,14 +10,14 @@
 
 ; LOOP_0-DAG:  "loop_depth": 1,
 ; LOOP_0-DAG:  "loop_id": 0,
-; LOOP_0-DAG:  "loop_trip_count": "unknown",
+; LOOP_0-DAG:  "loop_trip_count": "dynamic",
 ; LOOP_0-DAG:  "num_inner_loops": 1,
 ; LOOP_0-DAG:  "parent_function": "foo",
 ; LOOP_0-DAG:  "parent_loop_id": -1
 
 ; LOOP_1-DAG:  "loop_depth": 2,
 ; LOOP_1-DAG:  "loop_id": 1,
-; LOOP_1-DAG:  "loop_trip_count": "unknown",
+; LOOP_1-DAG:  "loop_trip_count": "dynamic",
 ; LOOP_1-DAG:  "num_inner_loops": 0,
 ; LOOP_1-DAG:  "parent_function": "foo",
 ; LOOP_1-DAG:  "parent_loop_id": 0
