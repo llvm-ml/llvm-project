@@ -14,6 +14,8 @@
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/Analysis/LoopInfo.h"
+#include "llvm/Analysis/ScalarEvolution.h"
+#include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Bitcode/BitcodeWriterPass.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/Dominators.h"
@@ -28,6 +30,7 @@
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/InitLLVM.h"
+#include "llvm/Support/JSON.h"
 #include "llvm/Support/Regex.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/SystemUtils.h"
@@ -40,6 +43,7 @@
 #include "llvm/Transforms/IPO/StripSymbols.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/CodeExtractor.h"
+#include "llvm/Transforms/Utils/LoopUtils.h"
 #include <memory>
 #include <utility>
 
@@ -88,6 +92,46 @@ static cl::opt<bool> PreserveAssemblyUseListOrder(
     "preserve-ll-uselistorder",
     cl::desc("Preserve use-list order when writing LLVM assembly."),
     cl::init(false), cl::Hidden, cl::cat(ExtractLoopsCat));
+
+static cl::opt<bool>
+    PrettyPrintJson("pretty-print-json",
+                    cl::desc("Pretty print the loop metadata json"),
+                    cl::init(false), cl::cat(ExtractLoopsCat));
+
+static void writeLoopMetadata(LoopInfo &LI, ScalarEvolution &SE, Loop &L,
+                              DenseMap<Loop *, unsigned> &LoopIDs,
+                              std::string Filename) {
+  std::string TripCount = "unknown";
+  if (SE.getSmallConstantTripCount(&L)) {
+    TripCount = "constant";
+  } else {
+    auto LoopBounds = L.getBounds(SE);
+    if (LoopBounds && LoopBounds->getStepValue())
+      TripCount = "dynamic";
+  }
+
+  int ParentID = -1;
+  Loop *ParentL = L.getParentLoop();
+  if (ParentL)
+    ParentID = LoopIDs[ParentL];
+  SmallVector<Loop *> InnerLoops;
+  L.getInnerLoopsInPreorder(L, InnerLoops);
+  unsigned NumInnerLoops = InnerLoops.size();
+
+  json::Object Json({{"loop_depth", L.getLoopDepth()},
+                     {"loop_trip_count", TripCount},
+                     {"parent_function", L.getHeader()->getParent()->getName()},
+                     {"loop_id", LoopIDs[&L]},
+                     {"parent_loop_id", ParentID},
+                     {"num_inner_loops", NumInnerLoops}});
+
+  std::error_code EC;
+  ToolOutputFile Out(Filename, EC, sys::fs::OF_None);
+  json::OStream JOS(Out.os(), PrettyPrintJson ? 2 : 0);
+  JOS.value(std::move(Json));
+  Out.os() << '\n';
+  Out.keep();
+}
 
 static void writeExtractedModuleInPlace(Module &M, Function &F,
                                         std::string Filename) {
@@ -174,6 +218,9 @@ int main(int argc, char **argv) {
   for (Function &F : *M)
     ToHandle.push_back(&F);
 
+  TargetLibraryInfoImpl TLII(Triple(M->getTargetTriple()));
+  TargetLibraryInfo TLI(TLII);
+  DataLayout DL(M->getDataLayout());
   unsigned LoopCounter = 0;
   for (Function *F : ToHandle) {
     if (F->isDeclaration())
@@ -181,10 +228,13 @@ int main(int argc, char **argv) {
 
     DominatorTree DT(*F);
     LoopInfo LI(DT);
+    AssumptionCache AC(*F);
+    ScalarEvolution SE(*F, TLI, AC, DT, LI);
 
+    DenseMap<Loop *, unsigned> LoopIDs;
+    unsigned LoopInFunctionCounter = 0;
     for (Loop *L : LI.getLoopsInPreorder()) {
       LLVM_DEBUG(L->dump());
-      unsigned Depth = L->getLoopDepth();
       llvm::ValueToValueMapTy VMap;
       // FIXME preferrably, we want to analyze the module and clone only the GVs
       // that we need. However, we currently clone the entire module so that we
@@ -194,8 +244,7 @@ int main(int argc, char **argv) {
       SmallVector<BasicBlock *> BBs;
       for (BasicBlock *BB : L->getBlocks())
         BBs.push_back(cast<BasicBlock>(VMap[BB]));
-      std::string Suffix =
-          "llvm_extracted_loop." + std::to_string(LoopCounter++);
+      std::string Suffix = "llvm_extracted_loop." + std::to_string(LoopCounter);
       auto CE =
           CodeExtractor(BBs, /*DT=*/nullptr, /*AggregateArgs=*/false,
                         /*BFI=*/nullptr, /*BPI=*/nullptr, /*AC=*/nullptr,
@@ -204,9 +253,18 @@ int main(int argc, char **argv) {
                         /*Suffix=*/Suffix, /*ArgsInZeroAddressSpace=*/false);
       CodeExtractorAnalysisCache CEAC(*NewF);
       Function *OutlinedF = CE.extractCodeRegion(CEAC);
-      std::string Filename = OutputFilenamePrefix +
-                             std::to_string(LoopCounter) + OutputFilenameSuffix;
-      writeExtractedModuleInPlace(*ClonedM, *OutlinedF, Filename);
+
+      std::string ModuleFilename = OutputFilenamePrefix +
+                                   std::to_string(LoopCounter) +
+                                   OutputFilenameSuffix;
+      writeExtractedModuleInPlace(*ClonedM, *OutlinedF, ModuleFilename);
+
+      LoopIDs[L] = LoopInFunctionCounter;
+      std::string JSONFilename = ModuleFilename + ".json";
+      writeLoopMetadata(LI, SE, *L, LoopIDs, JSONFilename);
+
+      LoopInFunctionCounter++;
+      LoopCounter++;
     }
   }
 

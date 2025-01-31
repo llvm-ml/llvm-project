@@ -1,10 +1,28 @@
 ; RUN: mkdir -p %t
 ; RUN: rm %t/extracted.* || true
-; RUN: llvm-extract-loops -S %s --output-prefix %t/extracted. --output-suffix .ll
-; RUN: cat %t/extracted.* | FileCheck %s
+; RUN: llvm-extract-loops -S %s --output-prefix %t/extracted. --output-suffix .ll --pretty-print-json
+; RUN: cat %t/extracted.*.ll | FileCheck %s
+; RUN: cat %t/extracted.0.ll.json | FileCheck %s --check-prefix=LOOP_0
+; RUN: cat %t/extracted.1.ll.json | FileCheck %s --check-prefix=LOOP_1
 
 ; CHECK: define{{.*}}@__llvm_extracted_loop
 ; CHECK: define{{.*}}@__llvm_extracted_loop
+
+; TODO at least for the outer loop it looks like the trip count should be dynamic?
+
+; LOOP_0-DAG:  "loop_depth": 1,
+; LOOP_0-DAG:  "loop_id": 0,
+; LOOP_0-DAG:  "loop_trip_count": "unknown",
+; LOOP_0-DAG:  "num_inner_loops": 1,
+; LOOP_0-DAG:  "parent_function": "foo",
+; LOOP_0-DAG:  "parent_loop_id": -1
+
+; LOOP_1-DAG:  "loop_depth": 2,
+; LOOP_1-DAG:  "loop_id": 1,
+; LOOP_1-DAG:  "loop_trip_count": "unknown",
+; LOOP_1-DAG:  "num_inner_loops": 0,
+; LOOP_1-DAG:  "parent_function": "foo",
+; LOOP_1-DAG:  "parent_loop_id": 0
 
 define i32 @foo(ptr %array, i32 %length, i32 %n, i32 %l) {
 entry:
