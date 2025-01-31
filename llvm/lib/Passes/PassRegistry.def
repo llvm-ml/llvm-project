@@ -160,6 +160,8 @@ MODULE_PASS("tysan", TypeSanitizerPass())
 MODULE_PASS("verify", VerifierPass())
 MODULE_PASS("view-callgraph", CallGraphViewerPass())
 MODULE_PASS("wholeprogramdevirt", WholeProgramDevirtPass())
+MODULE_PASS("inputgen-instrument-entries", InputGenInstrumentEntriesPass())
+MODULE_PASS("inputgen-instrument-memory", InputGenInstrumentMemoryPass())
 #undef MODULE_PASS
 
 #ifndef MODULE_PASS_WITH_PARAMS
