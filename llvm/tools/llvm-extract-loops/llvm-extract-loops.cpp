@@ -89,18 +89,12 @@ static cl::opt<bool> PreserveAssemblyUseListOrder(
     cl::desc("Preserve use-list order when writing LLVM assembly."),
     cl::init(false), cl::Hidden, cl::cat(ExtractLoopsCat));
 
-static void writeExtractedModule(Module &OriginalM, Function &OriginalF,
-                                 std::string Filename) {
-  // FIXME preferrably, we want to analyze the module and clone only the GVs
-  // that we need. However, we currently clone the entire module so that we can
-  // reuse the ExtractGVPass which deletes the unnecessary GVs.
-  ValueToValueMapTy VMap;
-  auto M = CloneModule(OriginalM, VMap);
+static void writeExtractedModuleInPlace(Module &M, Function &F,
+                                        std::string Filename) {
+  F.setName("__llvm_extracted_loop");
 
   SetVector<GlobalValue *> GVs;
-  Function *F = cast<Function>(VMap[&OriginalF]);
-  F->setName("__llvm_extracted_loop");
-  GVs.insert(F);
+  GVs.insert(&F);
 
   if (Recursive) {
     std::vector<llvm::Function *> Workqueue;
@@ -151,8 +145,21 @@ static void writeExtractedModule(Module &OriginalM, Function &OriginalF,
   else if (Force || !CheckBitcodeOutputToConsole(Out.os()))
     PM.addPass(BitcodeWriterPass(Out.os(), PreserveBitcodeUseListOrder));
 
-  PM.run(*M, MAM);
+  PM.run(M, MAM);
   Out.keep();
+}
+
+static void writeExtractedModule(Module &OriginalM, Function &OriginalF,
+                                 std::string Filename) {
+  // FIXME preferrably, we want to analyze the module and clone only the GVs
+  // that we need. However, we currently clone the entire module so that we can
+  // reuse the ExtractGVPass which deletes the unnecessary GVs.
+  ValueToValueMapTy VMap;
+  auto M = CloneModule(OriginalM, VMap);
+
+  Function *F = cast<Function>(VMap[&OriginalF]);
+  F->setName("__llvm_extracted_loop");
+  writeExtractedModuleInPlace(*M, *F, Filename);
 }
 
 int main(int argc, char **argv) {
@@ -192,7 +199,8 @@ int main(int argc, char **argv) {
       LLVM_DEBUG(L->dump());
       unsigned Depth = L->getLoopDepth();
       llvm::ValueToValueMapTy VMap;
-      Function *NewF = CloneFunction(F, VMap);
+      auto ClonedM = CloneModule(*M, VMap);
+      Function *NewF = cast<Function>(VMap[F]);
       SmallVector<BasicBlock *> BBs;
       for (BasicBlock *BB : L->getBlocks())
         BBs.push_back(cast<BasicBlock>(VMap[BB]));
@@ -208,7 +216,7 @@ int main(int argc, char **argv) {
       Function *OutlinedF = CE.extractCodeRegion(CEAC);
       std::string Filename = OutputFilenamePrefix +
                              std::to_string(LoopCounter) + OutputFilenameSuffix;
-      writeExtractedModule(*M, *OutlinedF, Filename);
+      writeExtractedModuleInPlace(*ClonedM, *OutlinedF, Filename);
     }
   }
 
