@@ -149,19 +149,6 @@ static void writeExtractedModuleInPlace(Module &M, Function &F,
   Out.keep();
 }
 
-static void writeExtractedModule(Module &OriginalM, Function &OriginalF,
-                                 std::string Filename) {
-  // FIXME preferrably, we want to analyze the module and clone only the GVs
-  // that we need. However, we currently clone the entire module so that we can
-  // reuse the ExtractGVPass which deletes the unnecessary GVs.
-  ValueToValueMapTy VMap;
-  auto M = CloneModule(OriginalM, VMap);
-
-  Function *F = cast<Function>(VMap[&OriginalF]);
-  F->setName("__llvm_extracted_loop");
-  writeExtractedModuleInPlace(*M, *F, Filename);
-}
-
 int main(int argc, char **argv) {
   InitLLVM X(argc, argv);
 
@@ -199,6 +186,9 @@ int main(int argc, char **argv) {
       LLVM_DEBUG(L->dump());
       unsigned Depth = L->getLoopDepth();
       llvm::ValueToValueMapTy VMap;
+      // FIXME preferrably, we want to analyze the module and clone only the GVs
+      // that we need. However, we currently clone the entire module so that we
+      // can reuse the ExtractGVPass which deletes the unnecessary GVs.
       auto ClonedM = CloneModule(*M, VMap);
       Function *NewF = cast<Function>(VMap[F]);
       SmallVector<BasicBlock *> BBs;
