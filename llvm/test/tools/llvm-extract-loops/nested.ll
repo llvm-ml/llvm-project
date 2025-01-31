@@ -8,8 +8,6 @@
 ; CHECK: define{{.*}}@__llvm_extracted_loop
 ; CHECK: define{{.*}}@__llvm_extracted_loop
 
-; TODO at least for the outer loop it looks like the trip count should be dynamic?
-
 ; LOOP_0-DAG:  "loop_depth": 1,
 ; LOOP_0-DAG:  "loop_id": 0,
 ; LOOP_0-DAG:  "loop_trip_count": "unknown",
