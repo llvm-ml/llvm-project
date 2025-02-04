@@ -39,7 +39,9 @@ def main(args):
     for data in ds:
         module = data['content']
         language = data['language']
-        dfs.append(process_module(module, language, i, pfile, args))
+        new_df = process_module(module, language, i, pfile, args)
+        if new_df is not None:
+            dfs.append(new_df)
         i += 1
         if i == args.num:
             break
@@ -97,8 +99,10 @@ def process_module_in_dir(module, language, idx, temp_outdir, output_dataset):
             break
         i += 1
 
-    df = pandas.concat(dfs)
-    return df
+    if len(dfs) == 0:
+        return None
+
+    return pandas.concat(dfs)
 
 if __name__ == '__main__':
     parse_args_and_run()
