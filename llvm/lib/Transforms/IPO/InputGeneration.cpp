@@ -14,6 +14,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Transforms/IPO/InputGeneration.h"
+#include "llvm/IR/InstIterator.h"
+#include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Transforms/IPO/InputGenerationImpl.h"
@@ -86,4 +88,31 @@ InputGenInstrumentMemoryPass::run(Module &M, AnalysisManager<Module> &MAM) {
     return PreservedAnalyses::none();
   return PreservedAnalyses::all();
 }
+
+void stripUnknownOperandBundles(Module &M) {
+  SmallVector<unsigned, LLVMContext::OB_convergencectrl + 1> KnownOBs;
+  for (unsigned OB = LLVMContext::OB_deopt;
+       OB <= LLVMContext::OB_convergencectrl; OB++)
+    KnownOBs.push_back(OB);
+  SmallVector<CallBase *> ToRemove;
+  for (auto &F : M.functions()) {
+    for (auto &I : instructions(F)) {
+      if (auto *CB = dyn_cast<CallBase>(&I)) {
+        SmallVector<OperandBundleDef, 1> Bundles;
+        for (unsigned I = 0, E = CB->getNumOperandBundles(); I != E; ++I) {
+          auto Bundle = CB->getOperandBundleAt(I);
+          if (is_contained(KnownOBs, Bundle.getTagID()))
+            Bundles.emplace_back(Bundle);
+        }
+        auto *NewCall = CallBase::Create(CB, Bundles, CB->getIterator());
+        NewCall->copyMetadata(*CB);
+        CB->replaceAllUsesWith(NewCall);
+        ToRemove.push_back(CB);
+      }
+    }
+  }
+  for (auto *CB : ToRemove)
+    CB->eraseFromParent();
+}
+
 } // namespace llvm

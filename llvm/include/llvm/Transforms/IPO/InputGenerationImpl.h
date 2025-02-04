@@ -20,6 +20,8 @@
 
 namespace llvm {
 
+void stripUnknownOperandBundles(Module &M);
+
 enum class IGIMode : unsigned { Record, Generate, Replay, Disabled };
 
 /// Prepares the entry points into functions for generation, recording, or
@@ -31,7 +33,7 @@ public:
   /// Instruments only a specific function.
   void instrumentFunction(Module &M, Function &F);
 
-  /// Instruments functinos marked by the inputgen_entry attribute.
+  /// Instruments functions marked by the inputgen_entry attribute.
   bool instrumentMarkedEntries(Module &M);
 
   /// Instruments all functions.
