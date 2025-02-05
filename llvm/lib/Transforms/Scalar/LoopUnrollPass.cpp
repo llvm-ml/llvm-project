@@ -32,6 +32,7 @@
 #include "llvm/Analysis/ProfileSummaryInfo.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
+#include "llvm/Analysis/UnrollAdvisor.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Constant.h"
@@ -178,11 +179,6 @@ static cl::opt<unsigned>
 static cl::opt<unsigned> PragmaUnrollFullMaxIterations(
     "pragma-unroll-full-max-iterations", cl::init(1'000'000), cl::Hidden,
     cl::desc("Maximum allowed iterations to unroll under pragma unroll full."));
-
-/// A magic value for use with the Threshold parameter to indicate
-/// that the loop unroll should be performed regardless of how much
-/// code expansion would result.
-static const unsigned NoThreshold = std::numeric_limits<unsigned>::max();
 
 /// Gather the various unrolling parameters based on the defaults, compiler
 /// flags, TTI overrides and user specified parameters.
@@ -865,54 +861,6 @@ static std::optional<unsigned> shouldFullUnroll(
   return std::nullopt;
 }
 
-static std::optional<unsigned>
-shouldPartialUnroll(const unsigned LoopSize, const unsigned TripCount,
-                    const UnrollCostEstimator UCE,
-                    const TargetTransformInfo::UnrollingPreferences &UP) {
-
-  if (!TripCount)
-    return std::nullopt;
-
-  if (!UP.Partial) {
-    LLVM_DEBUG(dbgs() << "  will not try to unroll partially because "
-               << "-unroll-allow-partial not given\n");
-    return 0;
-  }
-  unsigned count = UP.Count;
-  if (count == 0)
-    count = TripCount;
-  if (UP.PartialThreshold != NoThreshold) {
-    // Reduce unroll count to be modulo of TripCount for partial unrolling.
-    if (UCE.getUnrolledLoopSize(UP, count) > UP.PartialThreshold)
-      count = (std::max(UP.PartialThreshold, UP.BEInsns + 1) - UP.BEInsns) /
-        (LoopSize - UP.BEInsns);
-    if (count > UP.MaxCount)
-      count = UP.MaxCount;
-    while (count != 0 && TripCount % count != 0)
-      count--;
-    if (UP.AllowRemainder && count <= 1) {
-      // If there is no Count that is modulo of TripCount, set Count to
-      // largest power-of-two factor that satisfies the threshold limit.
-      // As we'll create fixup loop, do the type of unrolling only if
-      // remainder loop is allowed.
-      count = UP.DefaultUnrollRuntimeCount;
-      while (count != 0 &&
-             UCE.getUnrolledLoopSize(UP, count) > UP.PartialThreshold)
-        count >>= 1;
-    }
-    if (count < 2) {
-      count = 0;
-    }
-  } else {
-    count = TripCount;
-  }
-  if (count > UP.MaxCount)
-    count = UP.MaxCount;
-
-  LLVM_DEBUG(dbgs() << "  partially unrolling with count: " << count << "\n");
-
-  return count;
-}
 // Returns true if unroll count was set explicitly.
 // Calculates unroll count and writes it to UP.Count.
 // Unless IgnoreUser is true, will also use metadata and command-line options
@@ -1026,9 +974,15 @@ bool llvm::computeUnrollCount(
   if (TripCount)
     UP.Partial |= ExplicitUnroll;
 
+  // TODO in the future we will move this up and get recommendation on whether
+  // we want to also fully unroll from the same advice object.
+  UnrollAdvisor &Advisor = getUnrollAdvisor();
+  auto Advice = Advisor.getAdvice({LoopSize, TripCount, UCE, UP, SE, *LI, *L});
+  auto UnrollFactor = Advice->getRecommendedUnrollFactor();
+
   // 6th priority is partial unrolling.
   // Try partial unroll only when TripCount could be statically calculated.
-  if (auto UnrollFactor = shouldPartialUnroll(LoopSize, TripCount, UCE, UP)) {
+  if (UnrollFactor) {
     UP.Count = *UnrollFactor;
 
     if ((PragmaFullUnroll || PragmaEnableUnroll) && TripCount &&
@@ -1042,7 +996,7 @@ bool llvm::computeUnrollCount(
                   "unrolled size is too large.";
       });
 
-    if (UP.PartialThreshold != NoThreshold) {
+    if (UP.PartialThreshold != LoopUnrollNoThreshold) {
       if (UP.Count == 0) {
         if (PragmaEnableUnroll)
           ORE->emit([&]() {
