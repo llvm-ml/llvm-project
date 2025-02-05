@@ -1,5 +1,4 @@
-//===-- UnrollLoopAdvisor.cpp - Loop unrolling utilities
-//-------------------------===//
+//===-- UnrollLoopDevelopmentAdvisor.cpp ----------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -8,44 +7,27 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Analysis/LoopPropertiesAnalysis.h"
+#include "llvm/Analysis/MLModelRunner.h"
 #include "llvm/Analysis/NoInferenceModelRunner.h"
+#include "llvm/Analysis/ReleaseModeModelRunner.h"
+#include "llvm/Analysis/TensorSpec.h"
+#include "llvm/Analysis/UnrollAdvisor.h"
 #include "llvm/Analysis/Utils/TrainingLogger.h"
 #include "llvm/IR/Module.h"
-#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/LoopSimplify.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
-#include "llvm/Transforms/Utils/ScalarEvolutionExpander.h"
 #include "llvm/Transforms/Utils/SimplifyIndVar.h"
-#include "llvm/Transforms/Utils/UnrollLoop.h"
-
-#include "llvm/Transforms/Utils/LoopUtils.h"
-#include "llvm/Transforms/Utils/SimplifyIndVar.h"
-#include "llvm/Transforms/Utils/UnrollLoop.h"
-
-#include "llvm/Analysis/MLModelRunner.h"
-#include "llvm/Analysis/ReleaseModeModelRunner.h"
-#include "llvm/Analysis/TensorSpec.h"
-#include "llvm/Analysis/UnrollAdvisor.h"
-#include "llvm/Support/CommandLine.h"
-#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Transforms/Utils/UnrollLoop.h"
 #include <memory>
 
-#define DEBUG_TYPE "loop-unroll-advisor"
+#define DEBUG_TYPE "loop-unroll-development-advisor"
 
 using namespace llvm;
-
-static cl::opt<UnrollAdvisorMode> ClUnrollAdvisorMode(
-    "unroll-advisor-mode", cl::desc("Instrumentation mode"), cl::Hidden,
-    cl::init(UnrollAdvisorMode::Default),
-    cl::values(clEnumValN(UnrollAdvisorMode::Default, "default", ""),
-               clEnumValN(UnrollAdvisorMode::Release, "release", ""),
-               clEnumValN(UnrollAdvisorMode::Development, "development", "")));
-
-namespace llvm {
 
 static cl::opt<std::string>
     TrainingLog("mlgo-unroll-training-log", cl::Hidden,
@@ -211,100 +193,20 @@ void MLGOLoopUnrollAnalysis::logFeaturesAndDecision(const unsigned UnrollCount,
 
 } // namespace mlgo_loop_unroll
 
-static std::optional<unsigned>
-shouldPartialUnroll(const unsigned LoopSize, const unsigned TripCount,
-                    const UnrollCostEstimator UCE,
-                    const TargetTransformInfo::UnrollingPreferences &UP) {
-
-  if (!TripCount)
-    return std::nullopt;
-
-  if (!UP.Partial) {
-    LLVM_DEBUG(dbgs() << "  will not try to unroll partially because "
-                      << "-unroll-allow-partial not given\n");
-    return 0;
-  }
-
-  unsigned count = UP.Count;
-  if (count == 0)
-    count = TripCount;
-  if (UP.PartialThreshold != LoopUnrollNoThreshold) {
-    // Reduce unroll count to be modulo of TripCount for partial unrolling.
-    if (UCE.getUnrolledLoopSize(UP, count) > UP.PartialThreshold)
-      count = (std::max(UP.PartialThreshold, UP.BEInsns + 1) - UP.BEInsns) /
-              (LoopSize - UP.BEInsns);
-    if (count > UP.MaxCount)
-      count = UP.MaxCount;
-    while (count != 0 && TripCount % count != 0)
-      count--;
-    if (UP.AllowRemainder && count <= 1) {
-      // If there is no Count that is modulo of TripCount, set Count to
-      // largest power-of-two factor that satisfies the threshold limit.
-      // As we'll create fixup loop, do the type of unrolling only if
-      // remainder loop is allowed.
-      count = UP.DefaultUnrollRuntimeCount;
-      while (count != 0 &&
-             UCE.getUnrolledLoopSize(UP, count) > UP.PartialThreshold)
-        count >>= 1;
-    }
-    if (count < 2) {
-      count = 0;
-    }
-  } else {
-    count = TripCount;
-  }
-  if (count > UP.MaxCount)
-    count = UP.MaxCount;
-
-  LLVM_DEBUG(dbgs() << "  partially unrolling with count: " << count << "\n");
-
-  return count;
-}
-
-class MLUnrollAdvisor : public UnrollAdvisor {
+namespace llvm {
+class DevelopmentUnrollAdvisor : public UnrollAdvisor {
 public:
-  MLUnrollAdvisor() {}
-  ~MLUnrollAdvisor() {}
+  DevelopmentUnrollAdvisor() {}
+  ~DevelopmentUnrollAdvisor() {}
 
 protected:
   std::unique_ptr<UnrollAdvice> getAdviceImpl(UnrollAdviceInfo UAI) override {
-    return std::make_unique<UnrollAdvice>(
-        this,
-        shouldPartialUnroll(UAI.LoopSize, UAI.TripCount, UAI.UCE, UAI.UP));
+    return std::make_unique<UnrollAdvice>(this, std::nullopt);
   }
 };
 
-class DefaultUnrollAdvisor : public UnrollAdvisor {
-public:
-  DefaultUnrollAdvisor() {}
-  ~DefaultUnrollAdvisor() {}
-
-protected:
-  std::unique_ptr<UnrollAdvice> getAdviceImpl(UnrollAdviceInfo UAI) override {
-    return std::make_unique<UnrollAdvice>(
-        this,
-        shouldPartialUnroll(UAI.LoopSize, UAI.TripCount, UAI.UCE, UAI.UP));
-  }
-};
-
-std::unique_ptr<UnrollAdvice> UnrollAdvisor::getAdvice(UnrollAdviceInfo UAI) {
-  return getAdviceImpl(UAI);
-}
-
-UnrollAdvisor &getUnrollAdvisor() {
-  static std::unique_ptr<UnrollAdvisor> Advisor =
-      []() -> std::unique_ptr<UnrollAdvisor> {
-    switch (ClUnrollAdvisorMode) {
-    case UnrollAdvisorMode::Default:
-      return std::make_unique<DefaultUnrollAdvisor>();
-    case UnrollAdvisorMode::Release:
-      llvm_unreachable("Release mode for UnrollAdvisor not yet implemented");
-    case UnrollAdvisorMode::Development:
-      return std::make_unique<MLUnrollAdvisor>();
-    }
-    llvm_unreachable("Unknown mode");
-  }();
-  return *Advisor;
+std::unique_ptr<UnrollAdvisor> getDevelopmentModeUnrollAdvisor() {
+  return std::make_unique<DevelopmentUnrollAdvisor>();
 }
 
 } // namespace llvm

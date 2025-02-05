@@ -95,5 +95,7 @@ private:
 
 UnrollAdvisor &getUnrollAdvisor();
 
+std::unique_ptr<UnrollAdvisor> getDevelopmentModeUnrollAdvisor();
+
 } // namespace llvm
 #endif // LLVM_ANALYSIS_UNROLLADVISOR_H
