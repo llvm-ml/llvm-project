@@ -48,6 +48,12 @@ const char *const LLVMLoopUnrollFollowupRemainder =
     "llvm.loop.unroll.followup_remainder";
 /// @}
 
+/// A magic value for use with the Threshold parameter to indicate
+/// that the loop unroll should be performed regardless of how much
+/// code expansion would result.
+static const unsigned LoopUnrollNoThreshold =
+    std::numeric_limits<unsigned>::max();
+
 const Loop* addClonedBlockToLoopInfo(BasicBlock *OriginalBB,
                                      BasicBlock *ClonedBB, LoopInfo *LI,
                                      NewLoopsMap &NewLoops);
