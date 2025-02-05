@@ -6,9 +6,10 @@
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/ScopedPrinter.h"
 #include "llvm/Support/SourceMgr.h"
+#include "llvm/Support/VirtualFileSystem.h"
 #include "llvm/Transforms/Instrumentation/PGOInstrumentation.h"
-#include <llvm/Support/ScopedPrinter.h>
 
 using namespace llvm;
 
