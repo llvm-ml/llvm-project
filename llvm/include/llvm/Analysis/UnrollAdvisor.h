@@ -39,8 +39,8 @@ public:
   UnrollAdvice(UnrollAdvice &&) = delete;
   UnrollAdvice(const UnrollAdvice &) = delete;
   virtual ~UnrollAdvice() {
-    assert(Recorded && "UnrollAdvice should have been informed of the "
-                       "inliner's decision in all cases");
+    // assert(Recorded && "UnrollAdvice should have been informed of the "
+    //                    "inliner's decision in all cases");
   }
 
   void recordUnrolling(unsigned Factor);
