@@ -38,6 +38,7 @@ set(ANALYSIS_TEST_SOURCES
   LoadsTest.cpp
   LoopInfoTest.cpp
   LoopNestTest.cpp
+  LoopPropertiesAnalysisTest.cpp
   MemoryBuiltinsTest.cpp
   MemoryProfileInfoTest.cpp
   MemorySSATest.cpp
