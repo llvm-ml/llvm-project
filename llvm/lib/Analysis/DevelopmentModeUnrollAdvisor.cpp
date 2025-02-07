@@ -146,8 +146,10 @@ DevelopmentUnrollAdvisor::getAdviceImpl(UnrollAdviceInfo UAI) {
   if (*MaxEl > 1.0) {
     unsigned ArgMax = std::distance(UD.Out, MaxEl);
     UnrollFactor = ArgMax + UnrollFactorOffset;
+    LLVM_DEBUG(DBGS() << "got advice factor " << *UnrollFactor << "\n");
   } else {
     UnrollFactor = std::nullopt;
+    LLVM_DEBUG(DBGS() << "got advice nounroll\n");
   }
 
   return std::make_unique<DevelopmentUnrollAdvice>(this, UnrollFactor);
