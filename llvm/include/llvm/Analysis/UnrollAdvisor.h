@@ -20,7 +20,6 @@ class UnrollCostEstimator;
 enum class UnrollAdvisorMode : int { Default, Release, Development };
 
 struct UnrollAdviceInfo {
-  const unsigned LoopSize;
   const unsigned TripCount;
   const UnrollCostEstimator &UCE;
   TargetTransformInfo::UnrollingPreferences &UP;
@@ -39,11 +38,14 @@ public:
   UnrollAdvice(UnrollAdvice &&) = delete;
   UnrollAdvice(const UnrollAdvice &) = delete;
   virtual ~UnrollAdvice() {
-    // assert(Recorded && "UnrollAdvice should have been informed of the "
-    //                    "inliner's decision in all cases");
+    assert(Recorded && "UnrollAdvice should have been informed of the "
+                       "inliner's decision in all cases");
   }
 
-  void recordUnrolling(unsigned Factor);
+  void recordUnrolling(const LoopUnrollResult &Result) {
+    markRecorded();
+    recordUnrollingImpl();
+  }
 
   void recordUnsuccessfulUnrolling(const LoopUnrollResult &Result) {
     markRecorded();
@@ -95,6 +97,7 @@ private:
 
 UnrollAdvisor &getUnrollAdvisor();
 
+std::unique_ptr<UnrollAdvisor> getDefaultModeUnrollAdvisor();
 std::unique_ptr<UnrollAdvisor> getDevelopmentModeUnrollAdvisor();
 
 } // namespace llvm

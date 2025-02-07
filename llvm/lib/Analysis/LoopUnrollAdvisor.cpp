@@ -98,7 +98,7 @@ protected:
   std::unique_ptr<UnrollAdvice> getAdviceImpl(UnrollAdviceInfo UAI) override {
     return std::make_unique<UnrollAdvice>(
         this,
-        shouldPartialUnroll(UAI.LoopSize, UAI.TripCount, UAI.UCE, UAI.UP));
+        shouldPartialUnroll(UAI.UCE.getRolledLoopSize(), UAI.TripCount, UAI.UCE, UAI.UP));
   }
 };
 
@@ -106,12 +106,16 @@ std::unique_ptr<UnrollAdvice> UnrollAdvisor::getAdvice(UnrollAdviceInfo UAI) {
   return getAdviceImpl(UAI);
 }
 
+std::unique_ptr<UnrollAdvisor> getDefaultModeUnrollAdvisor() {
+  return std::make_unique<DefaultUnrollAdvisor>();
+}
+
 UnrollAdvisor &getUnrollAdvisor() {
   static std::unique_ptr<UnrollAdvisor> Advisor =
       []() -> std::unique_ptr<UnrollAdvisor> {
     switch (ClUnrollAdvisorMode) {
     case UnrollAdvisorMode::Default:
-      return std::make_unique<DefaultUnrollAdvisor>();
+      return getDefaultModeUnrollAdvisor();
     case UnrollAdvisorMode::Release:
       llvm_unreachable("Release mode for UnrollAdvisor not yet implemented");
     case UnrollAdvisorMode::Development:
