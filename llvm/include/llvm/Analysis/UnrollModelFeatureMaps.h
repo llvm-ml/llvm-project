@@ -39,9 +39,12 @@ enum class UnrollFeatureIndex : size_t {
 // clang-format on
 
 static constexpr unsigned MaxUnrollFactor = 32;
+static constexpr unsigned UnrollFactorOffset = 2;
+static constexpr unsigned UnrollModelOutputLength =
+    MaxUnrollFactor - UnrollFactorOffset;
 
 struct __attribute__((packed)) UnrollDecisionTy {
-  float Out[MaxUnrollFactor];
+  float Out[UnrollModelOutputLength];
 };
 
 extern const std::vector<TensorSpec> UnrollFeatureMap;
