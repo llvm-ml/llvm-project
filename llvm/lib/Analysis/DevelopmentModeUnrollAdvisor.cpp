@@ -30,6 +30,7 @@
 #include <memory>
 
 #define DEBUG_TYPE "loop-unroll-development-advisor"
+#define DBGS() llvm::dbgs() << "mlgo-loop-unroll: "
 
 using namespace llvm;
 
@@ -75,12 +76,17 @@ private:
 class DevelopmentUnrollAdvice : public UnrollAdvice {
 public:
   using UnrollAdvice::UnrollAdvice;
-  void recordUnrollingImpl() override { getAdvisor()->onAction(); }
+  void recordUnrollingImpl() override {
+    LLVM_DEBUG(DBGS() << "unrolled\n");
+    getAdvisor()->onAction();
+  }
   void
   recordUnsuccessfulUnrollingImpl(const LoopUnrollResult &Result) override {
+    LLVM_DEBUG(DBGS() << "unsuccessful unroll\n");
     getAdvisor()->onNoAction();
   }
   void recordUnattemptedUnrollingImpl() override {
+    LLVM_DEBUG(DBGS() << "unattempted unroll\n");
     getAdvisor()->onNoAction();
   }
 
@@ -129,11 +135,22 @@ DevelopmentUnrollAdvisor::getAdviceImpl(UnrollAdviceInfo UAI) {
   SET(logical_inst_count, int64_t, LPI.LogicalInstCount);
   SET(cast_inst_count, int64_t, LPI.CastInstCount);
 #undef SET
-  UnrollDecisionTy UD = ModelRunner->evaluate<UnrollDecisionTy>();
-  auto MaxEl = std::max_element(UD.Out, UD.Out + MaxUnrollFactor);
-  unsigned ArgMax = std::distance(UD.Out, MaxEl);
 
-  return std::make_unique<DevelopmentUnrollAdvice>(this, ArgMax);
+  // The model gives us a speedup estimate for each unroll factor in
+  // [2,MaxUnrollFactor] whose indices are offset by UnrollFactorOffset.
+  UnrollDecisionTy UD = ModelRunner->evaluate<UnrollDecisionTy>();
+  auto MaxEl = std::max_element(UD.Out, UD.Out + UnrollModelOutputLength);
+
+  // Only unroll if the biggest estimated speedup is greater than 1.0.
+  std::optional<unsigned> UnrollFactor;
+  if (*MaxEl > 1.0) {
+    unsigned ArgMax = std::distance(UD.Out, MaxEl);
+    UnrollFactor = ArgMax + UnrollFactorOffset;
+  } else {
+    UnrollFactor = std::nullopt;
+  }
+
+  return std::make_unique<DevelopmentUnrollAdvice>(this, UnrollFactor);
 }
 
 } // namespace
@@ -152,5 +169,5 @@ const std::vector<TensorSpec> llvm::mlgo::UnrollFeatureMap{
 // clang-format on
 
 const char *const llvm::mlgo::UnrollDecisionName = "unrolling_decision";
-const TensorSpec llvm::mlgo::UnrollDecisionSpec =
-    TensorSpec::createSpec<float>(UnrollDecisionName, {MaxUnrollFactor});
+const TensorSpec llvm::mlgo::UnrollDecisionSpec = TensorSpec::createSpec<float>(
+    UnrollDecisionName, {UnrollModelOutputLength});
