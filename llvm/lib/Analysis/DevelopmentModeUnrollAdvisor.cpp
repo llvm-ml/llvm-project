@@ -121,6 +121,16 @@ DevelopmentUnrollAdvisor::getAdviceImpl(UnrollAdviceInfo UAI) {
   LoopPropertiesInfo LPI =
       LoopPropertiesInfo::getLoopPropertiesInfo(&UAI.L, &UAI.LI, &UAI.SE);
 
+  // The intent behind logging is is not to use it as a feature but to enable
+  // the ml training flow to use the default heuristic for some decisions.
+  std::optional<unsigned> DefaultHeuristic = shouldPartialUnroll(
+      UAI.UCE.getRolledLoopSize(), UAI.TripCount, UAI.UCE, UAI.UP);
+  if (DefaultHeuristic)
+    LLVM_DEBUG(DBGS() << "default heuristic says " << *DefaultHeuristic
+                      << "\n");
+  else
+    LLVM_DEBUG(DBGS() << "default heuristic says no unrolling\n");
+
 #define SET(id, type, val)                                                     \
   *ModelRunner->getTensor<type>(UnrollFeatureIndex::id) =                      \
       static_cast<type>(val);
@@ -134,6 +144,7 @@ DevelopmentUnrollAdvisor::getAdviceImpl(UnrollAdviceInfo UAI) {
   SET(store_inst_count, int64_t, LPI.StoreInstCount);
   SET(logical_inst_count, int64_t, LPI.LogicalInstCount);
   SET(cast_inst_count, int64_t, LPI.CastInstCount);
+  SET(heuristic_result, int64_t, DefaultHeuristic ? *DefaultHeuristic : 0);
 #undef SET
 
   // The model gives us a speedup estimate for each unroll factor in
