@@ -31,7 +31,7 @@
 using namespace llvm;
 
 static cl::opt<UnrollAdvisorMode> ClUnrollAdvisorMode(
-    "loop-unroll-advisor-mode", cl::desc("Instrumentation mode"), cl::Hidden,
+    "mlgo-loop-unroll-advisor-mode", cl::desc("Loop unroll ML mode"), cl::Hidden,
     cl::init(UnrollAdvisorMode::Default),
     cl::values(clEnumValN(UnrollAdvisorMode::Default, "default", ""),
                clEnumValN(UnrollAdvisorMode::Release, "release", ""),
