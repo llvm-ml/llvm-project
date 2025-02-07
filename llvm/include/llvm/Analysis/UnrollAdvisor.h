@@ -61,7 +61,6 @@ public:
 
 protected:
   virtual void recordUnrollingImpl() {}
-  virtual void recordUnrollingWithCalleeDeletedImpl() {}
   virtual void recordUnsuccessfulUnrollingImpl(const LoopUnrollResult &Result) {
   }
   virtual void recordUnattemptedUnrollingImpl() {}
