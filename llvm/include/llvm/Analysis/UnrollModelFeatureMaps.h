@@ -26,7 +26,8 @@ namespace mlgo {
   M(int64_t, {1}, load_inst_count, "load instruction count")                   \
   M(int64_t, {1}, store_inst_count, "store instruction count")                 \
   M(int64_t, {1}, logical_inst_count, "logical instruction count")             \
-  M(int64_t, {1}, cast_inst_count, "cast instruction count")
+  M(int64_t, {1}, cast_inst_count, "cast instruction count")                   \
+  M(int64_t, {1}, heuristic_result, "result of the default heuristic")
 
 // clang-format off
 enum class UnrollFeatureIndex : size_t {

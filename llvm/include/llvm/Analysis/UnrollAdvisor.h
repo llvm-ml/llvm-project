@@ -99,5 +99,11 @@ UnrollAdvisor &getUnrollAdvisor();
 std::unique_ptr<UnrollAdvisor> getDefaultModeUnrollAdvisor();
 std::unique_ptr<UnrollAdvisor> getDevelopmentModeUnrollAdvisor();
 
+/// The default heuristic
+std::optional<unsigned>
+shouldPartialUnroll(const unsigned LoopSize, const unsigned TripCount,
+                    const UnrollCostEstimator UCE,
+                    const TargetTransformInfo::UnrollingPreferences &UP);
+
 } // namespace llvm
 #endif // LLVM_ANALYSIS_UNROLLADVISOR_H

@@ -6,7 +6,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/Analysis/InlineAdvisor.h"
 #include "llvm/Analysis/LoopPropertiesAnalysis.h"
 #include "llvm/Analysis/MLModelRunner.h"
 #include "llvm/Analysis/NoInferenceModelRunner.h"
@@ -39,7 +38,7 @@ static cl::opt<UnrollAdvisorMode> ClUnrollAdvisorMode(
 
 namespace llvm {
 
-static std::optional<unsigned>
+std::optional<unsigned>
 shouldPartialUnroll(const unsigned LoopSize, const unsigned TripCount,
                     const UnrollCostEstimator UCE,
                     const TargetTransformInfo::UnrollingPreferences &UP) {
