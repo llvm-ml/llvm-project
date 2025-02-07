@@ -36,6 +36,7 @@ class OptimizationRemarkEmitter;
 class ScalarEvolution;
 class StringRef;
 class Value;
+class UnrollAdvice;
 
 using NewLoopsMap = SmallDenseMap<const Loop *, Loop *, 4>;
 
@@ -167,7 +168,7 @@ bool computeUnrollCount(Loop *L, const TargetTransformInfo &TTI,
                         unsigned TripMultiple, const UnrollCostEstimator &UCE,
                         TargetTransformInfo::UnrollingPreferences &UP,
                         TargetTransformInfo::PeelingPreferences &PP,
-                        bool &UseUpperBound);
+                        bool &UseUpperBound, UnrollAdvice &Advice);
 
 } // end namespace llvm
 

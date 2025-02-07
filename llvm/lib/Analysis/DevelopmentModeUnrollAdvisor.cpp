@@ -63,7 +63,7 @@ protected:
 
 #define SET(id, type, val)                                                     \
   *ModelRunner->getTensor<type>(UnrollFeatureIndex::id) = static_cast<type>(val);
-    SET(loop_size, int64_t, UAI.LoopSize);
+    SET(loop_size, int64_t, UAI.UCE.getRolledLoopSize());
     SET(trip_count, int64_t, UAI.TripCount);
     SET(is_innermost_loop, int64_t, LPI.IsInnerMostLoop);
     SET(preheader_blocksize, int64_t, LPI.PreheaderBlocksize);

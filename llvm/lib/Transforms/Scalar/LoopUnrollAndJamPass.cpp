@@ -25,6 +25,7 @@
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
+#include "llvm/Analysis/UnrollAdvisor.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Dominators.h"
@@ -164,10 +165,14 @@ static bool computeUnrollAndJamCount(
   // We have already checked that the loop has no unroll.* pragmas.
   unsigned MaxTripCount = 0;
   bool UseUpperBound = false;
+  // TODO do we also want to hook up the ML model here?
+  auto Advisor = getDefaultModeUnrollAdvisor();
+  auto Advice = Advisor->getAdvice({OuterTripCount, OuterUCE, UP, SE, *LI, *L});
+  Advice->recordUnattemptedUnrolling();
   bool ExplicitUnroll = computeUnrollCount(
     L, TTI, DT, LI, AC, SE, EphValues, ORE, OuterTripCount, MaxTripCount,
       /*MaxOrZero*/ false, OuterTripMultiple, OuterUCE, UP, PP,
-      UseUpperBound);
+      UseUpperBound, *Advice);
   if (ExplicitUnroll || UseUpperBound) {
     // If the user explicitly set the loop as unrolled, dont UnJ it. Leave it
     // for the unroller instead.
