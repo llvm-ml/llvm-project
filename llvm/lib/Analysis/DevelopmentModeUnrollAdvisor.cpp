@@ -38,8 +38,8 @@ static cl::opt<std::string> InteractiveChannelBaseName(
     "mlgo-loop-unroll-interactive-channel-base", cl::Hidden,
     cl::desc(
         "Base file path for the interactive mode. The incoming filename should "
-        "have the name <inliner-interactive-channel-base>.in, while the "
-        "outgoing name should be <inliner-interactive-channel-base>.out"));
+        "have the name <name>.in, while the outgoing name should be "
+        "<name>.out"));
 
 static cl::opt<std::string> ActionFeedbackChannelName(
     "mlgo-loop-unroll-action-feedback-channel", cl::Hidden,
