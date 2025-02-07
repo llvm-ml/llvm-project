@@ -18,6 +18,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/Local.h"
@@ -33,57 +34,108 @@
 using namespace llvm;
 
 static cl::opt<std::string> InteractiveChannelBaseName(
-    "loop-unroll-interactive-channel-base", cl::Hidden,
+    "mlgo-loop-unroll-interactive-channel-base", cl::Hidden,
     cl::desc(
         "Base file path for the interactive mode. The incoming filename should "
         "have the name <inliner-interactive-channel-base>.in, while the "
         "outgoing name should be <inliner-interactive-channel-base>.out"));
 
+static cl::opt<std::string> ActionFeedbackChannelName(
+    "mlgo-loop-unroll-action-feedback-channel", cl::Hidden,
+    cl::desc("File path for the feedback channel. The compiler will send the "
+             "result of the use of the advice to this channel."));
+
 using namespace llvm::mlgo;
 
 namespace {
+
 class DevelopmentUnrollAdvisor : public UnrollAdvisor {
 public:
   DevelopmentUnrollAdvisor() {}
   ~DevelopmentUnrollAdvisor() {}
 
-protected:
-  std::unique_ptr<UnrollAdvice> getAdviceImpl(UnrollAdviceInfo UAI) override {
-    if (!ModelRunner)
-      // TODO Not sure if this is safe as if the LLVMContext that we pass in
-      // here _could_ change from call to call to this function. It seems to
-      // currently only be used to emit errors so it should be fine.
-      ModelRunner = std::make_unique<InteractiveModelRunner>(
-          UAI.L.getHeader()->getContext(), mlgo::UnrollFeatureMap,
-          mlgo::UnrollDecisionSpec, InteractiveChannelBaseName + ".out",
-          InteractiveChannelBaseName + ".in");
-
-    LoopPropertiesInfo LPI =
-        LoopPropertiesInfo::getLoopPropertiesInfo(&UAI.L, &UAI.LI, &UAI.SE);
-
-#define SET(id, type, val)                                                     \
-  *ModelRunner->getTensor<type>(UnrollFeatureIndex::id) = static_cast<type>(val);
-    SET(loop_size, int64_t, UAI.UCE.getRolledLoopSize());
-    SET(trip_count, int64_t, UAI.TripCount);
-    SET(is_innermost_loop, int64_t, LPI.IsInnerMostLoop);
-    SET(preheader_blocksize, int64_t, LPI.PreheaderBlocksize);
-    SET(bb_count, int64_t, LPI.BasicBlockCount);
-    SET(num_of_loop_latch, int64_t, LPI.LoopLatchCount);
-    SET(load_inst_count, int64_t, LPI.LoadInstCount);
-    SET(store_inst_count, int64_t, LPI.StoreInstCount);
-    SET(logical_inst_count, int64_t, LPI.LogicalInstCount);
-    SET(cast_inst_count, int64_t, LPI.CastInstCount);
-#undef SET
-    UnrollDecisionTy UD = ModelRunner->evaluate<UnrollDecisionTy>();
-    auto MaxEl = std::max_element(UD.Out, UD.Out + MaxUnrollFactor);
-    unsigned ArgMax = std::distance(UD.Out, MaxEl);
-
-    return std::make_unique<UnrollAdvice>(this, ArgMax);
+  void onAction() {
+    if (ActionFeedbackOut)
+      ActionFeedbackOut->write(1);
   }
+  void onNoAction() {
+    if (ActionFeedbackOut)
+      ActionFeedbackOut->write(0);
+  }
+
+protected:
+  std::unique_ptr<UnrollAdvice> getAdviceImpl(UnrollAdviceInfo UAI) override;
 
 private:
   std::unique_ptr<MLModelRunner> ModelRunner;
+  std::unique_ptr<raw_fd_ostream> ActionFeedbackOut;
+  LLVMContext *Ctx;
 };
+
+class DevelopmentUnrollAdvice : public UnrollAdvice {
+public:
+  using UnrollAdvice::UnrollAdvice;
+  void recordUnrollingImpl() override { getAdvisor()->onAction(); }
+  void
+  recordUnsuccessfulUnrollingImpl(const LoopUnrollResult &Result) override {
+    getAdvisor()->onNoAction();
+  }
+  void recordUnattemptedUnrollingImpl() override {
+    getAdvisor()->onNoAction();
+  }
+
+private:
+  DevelopmentUnrollAdvisor *getAdvisor() const {
+    return static_cast<DevelopmentUnrollAdvisor *>(Advisor);
+  };
+};
+
+std::unique_ptr<UnrollAdvice>
+DevelopmentUnrollAdvisor::getAdviceImpl(UnrollAdviceInfo UAI) {
+  if (!ModelRunner) {
+    Ctx = &UAI.L.getHeader()->getContext();
+    // TODO Not sure if this is safe as if the LLVMContext that we pass in
+    // here _could_ change from call to call to this function. It seems to
+    // currently only be used to emit errors so it should be fine.
+    ModelRunner = std::make_unique<InteractiveModelRunner>(
+        *Ctx, mlgo::UnrollFeatureMap, mlgo::UnrollDecisionSpec,
+        InteractiveChannelBaseName + ".out",
+        InteractiveChannelBaseName + ".in");
+    if (ActionFeedbackChannelName.getNumOccurrences() > 0) {
+      std::error_code EC;
+      ActionFeedbackOut =
+          std::make_unique<raw_fd_ostream>(ActionFeedbackChannelName, EC);
+      if (EC) {
+        Ctx->emitError("Cannot open outbound file: " + EC.message());
+        ActionFeedbackOut.reset();
+      }
+    }
+  }
+
+  LoopPropertiesInfo LPI =
+      LoopPropertiesInfo::getLoopPropertiesInfo(&UAI.L, &UAI.LI, &UAI.SE);
+
+#define SET(id, type, val)                                                     \
+  *ModelRunner->getTensor<type>(UnrollFeatureIndex::id) =                      \
+      static_cast<type>(val);
+  SET(loop_size, int64_t, UAI.UCE.getRolledLoopSize());
+  SET(trip_count, int64_t, UAI.TripCount);
+  SET(is_innermost_loop, int64_t, LPI.IsInnerMostLoop);
+  SET(preheader_blocksize, int64_t, LPI.PreheaderBlocksize);
+  SET(bb_count, int64_t, LPI.BasicBlockCount);
+  SET(num_of_loop_latch, int64_t, LPI.LoopLatchCount);
+  SET(load_inst_count, int64_t, LPI.LoadInstCount);
+  SET(store_inst_count, int64_t, LPI.StoreInstCount);
+  SET(logical_inst_count, int64_t, LPI.LogicalInstCount);
+  SET(cast_inst_count, int64_t, LPI.CastInstCount);
+#undef SET
+  UnrollDecisionTy UD = ModelRunner->evaluate<UnrollDecisionTy>();
+  auto MaxEl = std::max_element(UD.Out, UD.Out + MaxUnrollFactor);
+  unsigned ArgMax = std::distance(UD.Out, MaxEl);
+
+  return std::make_unique<DevelopmentUnrollAdvice>(this, ArgMax);
+}
+
 } // namespace
 
 std::unique_ptr<UnrollAdvisor> llvm::getDevelopmentModeUnrollAdvisor() {
@@ -102,4 +154,3 @@ const std::vector<TensorSpec> llvm::mlgo::UnrollFeatureMap{
 const char *const llvm::mlgo::UnrollDecisionName = "unrolling_decision";
 const TensorSpec llvm::mlgo::UnrollDecisionSpec =
     TensorSpec::createSpec<float>(UnrollDecisionName, {MaxUnrollFactor});
-
