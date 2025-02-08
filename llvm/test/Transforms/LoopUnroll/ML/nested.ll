@@ -1,14 +1,12 @@
 ; RUN: mkdir -p %t
 ; RUN: rm %t/channel.in || true
 ; RUN: rm %t/channel.out || true
-; RUN: rm %t/channel.action.out || true
 ;      Create lots of zero bytes:
 ; RUN: truncate -s 1000 %t/channel.in
 ; RUN: touch %t/channel.out
-; RUN: opt %s -S -O3 --mlgo-loop-unroll-interactive-channel-base=%t/channel --mlgo-loop-unroll-action-feedback-channel=%t/channel.action.out --mlgo-loop-unroll-advisor-mode=development
+; RUN: opt %s -S -O3 --mlgo-loop-unroll-interactive-channel-base=%t/channel --mlgo-loop-unroll-advisor-mode=development
 ;      Check that we did output feature logs:
 ; RUN: [ -s %t/channel.out ]
-; RUN: [ -s %t/channel.action.out ]
 
 declare i32 @foo(ptr, i32, i32, i32)
 

@@ -5,6 +5,21 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
+//
+// The development advisor communicates over the channels in the following way:
+//
+// > is output
+// < is input
+//
+// > {"observation" : <id : int>}
+// > feature tensor
+// > {"heuristic" : <id : int>}
+// > heuristic result : int64_t (i.e. unroll factor)
+// < Model Output
+// > {"action" : <id : int>}
+// > action result : uint8_t
+//
+//===----------------------------------------------------------------------===//
 
 #include "llvm/Analysis/InteractiveModelRunner.h"
 #include "llvm/Analysis/LoopPropertiesAnalysis.h"
@@ -27,6 +42,7 @@
 #include "llvm/Transforms/Utils/SimplifyIndVar.h"
 #include "llvm/Transforms/Utils/UnrollLoop.h"
 #include <algorithm>
+#include <cstdint>
 #include <memory>
 
 #define DEBUG_TYPE "loop-unroll-development-advisor"
@@ -41,35 +57,46 @@ static cl::opt<std::string> InteractiveChannelBaseName(
         "have the name <name>.in, while the outgoing name should be "
         "<name>.out"));
 
-static cl::opt<std::string> ActionFeedbackChannelName(
-    "mlgo-loop-unroll-action-feedback-channel", cl::Hidden,
-    cl::desc("File path for the feedback channel. The compiler will send the "
-             "result of the use of the advice to this channel."));
-
 using namespace llvm::mlgo;
 
 namespace {
+
+class UnrollInteractiveModelRunner : public InteractiveModelRunner {
+public:
+  using InteractiveModelRunner::InteractiveModelRunner;
+
+  static bool classof(const MLModelRunner *R) {
+    return R->getKind() == MLModelRunner::Kind::UnrollInteractive;
+  }
+
+  void logHeuristic(std::optional<unsigned> UnrollFactor) {
+    if (UnrollFactor) {
+      Log->logCustom<uint64_t>("heuristic", *UnrollFactor);
+    } else {
+      Log->logCustom<uint64_t>("heuristic", 0);
+    }
+    Log->flush();
+  }
+  void logAction(bool Unrolled) {
+    Log->logCustom<uint8_t>("action", Unrolled);
+    Log->flush();
+  }
+};
 
 class DevelopmentUnrollAdvisor : public UnrollAdvisor {
 public:
   DevelopmentUnrollAdvisor() {}
   ~DevelopmentUnrollAdvisor() {}
 
-  void onAction() {
-    if (ActionFeedbackOut)
-      ActionFeedbackOut->write(1);
-  }
-  void onNoAction() {
-    if (ActionFeedbackOut)
-      ActionFeedbackOut->write(0);
-  }
+  void onAction() { getModelRunner()->logAction(true); }
+  void onNoAction() { getModelRunner()->logAction(false); }
 
 protected:
   std::unique_ptr<UnrollAdvice> getAdviceImpl(UnrollAdviceInfo UAI) override;
 
 private:
-  std::unique_ptr<MLModelRunner> ModelRunner;
-  std::unique_ptr<raw_fd_ostream> ActionFeedbackOut;
+  UnrollInteractiveModelRunner *getModelRunner() { return ModelRunner.get(); }
+  std::unique_ptr<UnrollInteractiveModelRunner> ModelRunner;
   LLVMContext *Ctx;
 };
 
@@ -103,33 +130,14 @@ DevelopmentUnrollAdvisor::getAdviceImpl(UnrollAdviceInfo UAI) {
     // TODO Not sure if this is safe as if the LLVMContext that we pass in
     // here _could_ change from call to call to this function. It seems to
     // currently only be used to emit errors so it should be fine.
-    ModelRunner = std::make_unique<InteractiveModelRunner>(
+    ModelRunner = std::make_unique<UnrollInteractiveModelRunner>(
         *Ctx, mlgo::UnrollFeatureMap, mlgo::UnrollDecisionSpec,
         InteractiveChannelBaseName + ".out",
         InteractiveChannelBaseName + ".in");
-    if (ActionFeedbackChannelName.getNumOccurrences() > 0) {
-      std::error_code EC;
-      ActionFeedbackOut =
-          std::make_unique<raw_fd_ostream>(ActionFeedbackChannelName, EC);
-      if (EC) {
-        Ctx->emitError("Cannot open outbound file: " + EC.message());
-        ActionFeedbackOut.reset();
-      }
-    }
   }
 
   LoopPropertiesInfo LPI =
       LoopPropertiesInfo::getLoopPropertiesInfo(&UAI.L, &UAI.LI, &UAI.SE);
-
-  // The intent behind logging is is not to use it as a feature but to enable
-  // the ml training flow to use the default heuristic for some decisions.
-  std::optional<unsigned> DefaultHeuristic = shouldPartialUnroll(
-      UAI.UCE.getRolledLoopSize(), UAI.TripCount, UAI.UCE, UAI.UP);
-  if (DefaultHeuristic)
-    LLVM_DEBUG(DBGS() << "default heuristic says " << *DefaultHeuristic
-                      << "\n");
-  else
-    LLVM_DEBUG(DBGS() << "default heuristic says no unrolling\n");
 
 #define SET(id, type, val)                                                     \
   *ModelRunner->getTensor<type>(UnrollFeatureIndex::id) =                      \
@@ -144,12 +152,22 @@ DevelopmentUnrollAdvisor::getAdviceImpl(UnrollAdviceInfo UAI) {
   SET(store_inst_count, int64_t, LPI.StoreInstCount);
   SET(logical_inst_count, int64_t, LPI.LogicalInstCount);
   SET(cast_inst_count, int64_t, LPI.CastInstCount);
-  SET(heuristic_result, int64_t, DefaultHeuristic ? *DefaultHeuristic : 0);
 #undef SET
 
+  ModelRunner->logInput();
+
+  std::optional<unsigned> DefaultHeuristic = shouldPartialUnroll(
+      UAI.UCE.getRolledLoopSize(), UAI.TripCount, UAI.UCE, UAI.UP);
+  getModelRunner()->logHeuristic(DefaultHeuristic);
+  if (DefaultHeuristic)
+    LLVM_DEBUG(DBGS() << "default heuristic says " << *DefaultHeuristic
+                      << "\n");
+  else
+    LLVM_DEBUG(DBGS() << "default heuristic says no unrolling\n");
+
+  UnrollDecisionTy UD = ModelRunner->getOutput<UnrollDecisionTy>();
   // The model gives us a speedup estimate for each unroll factor in
   // [2,MaxUnrollFactor] whose indices are offset by UnrollFactorOffset.
-  UnrollDecisionTy UD = ModelRunner->evaluate<UnrollDecisionTy>();
   auto MaxEl = std::max_element(UD.Out, UD.Out + UnrollModelOutputLength);
 
   // Only unroll if the biggest estimated speedup is greater than 1.0.
