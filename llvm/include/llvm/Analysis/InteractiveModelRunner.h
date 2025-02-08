@@ -50,10 +50,20 @@ public:
     Log->flush();
   }
 
+  void logInput();
+
+  template <typename T> T getOutput() {
+    return *reinterpret_cast<T *>(getOutputUntyped());
+  }
+
   virtual ~InteractiveModelRunner();
 
 private:
-  void *evaluateUntyped() override;
+  void *evaluateUntyped() override {
+    logInput();
+    return getOutputUntyped();
+  }
+  void *getOutputUntyped();
   // This must be declared before InEC if we want to initialize it in the
   // ctor initializer list.
   int Inbound = -1;
@@ -62,6 +72,8 @@ private:
   std::error_code OutEC;
   std::error_code InEC;
   std::vector<char> OutputBuffer;
+
+protected:
   std::unique_ptr<Logger> Log;
 };
 } // namespace llvm
