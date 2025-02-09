@@ -38,10 +38,12 @@ enum class UnrollFeatureIndex : size_t {
 };
 // clang-format on
 
+// These need to be kept in sync with the ones in unrolling_runner.py
 static constexpr unsigned MaxUnrollFactor = 32;
 static constexpr unsigned UnrollFactorOffset = 2;
+// + 1 because inclusive
 static constexpr unsigned UnrollModelOutputLength =
-    MaxUnrollFactor - UnrollFactorOffset;
+    1 + MaxUnrollFactor - UnrollFactorOffset;
 
 struct __attribute__((packed)) UnrollDecisionTy {
   float Out[UnrollModelOutputLength];
