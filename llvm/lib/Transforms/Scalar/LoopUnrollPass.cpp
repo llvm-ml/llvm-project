@@ -1246,6 +1246,13 @@ tryToUnrollLoop(Loop *L, DominatorTree &DT, LoopInfo *LI, ScalarEvolution &SE,
   // we want to also fully unroll from the same advice object.
   UnrollAdvisor &Advisor = getUnrollAdvisor();
   auto Advice = Advisor.getAdvice({TripCount, UCE, UP, SE, *LI, *L});
+  auto Instrument = [&](UnrollAdvice::InstrumentationInfo Info) {
+    if (!Info)
+      return;
+    UnrollAdvice::instrument(
+        Info, L->getLoopPreheader()->getTerminator()->getIterator(),
+        L->getExitBlock()->getFirstNonPHIOrDbgOrAlloca());
+  };
 
   // computeUnrollCount() decides whether it is beneficial to use upper bound to
   // fully unroll the loop.
@@ -1254,7 +1261,7 @@ tryToUnrollLoop(Loop *L, DominatorTree &DT, LoopInfo *LI, ScalarEvolution &SE,
       L, TTI, DT, LI, &AC, SE, EphValues, &ORE, TripCount, MaxTripCount,
       MaxOrZero, TripMultiple, UCE, UP, PP, UseUpperBound, *Advice);
   if (!UP.Count) {
-    Advice->recordUnattemptedUnrolling();
+    Instrument(Advice->recordUnattemptedUnrolling());
     return LoopUnrollResult::Unmodified;
   }
 
@@ -1278,10 +1285,10 @@ tryToUnrollLoop(Loop *L, DominatorTree &DT, LoopInfo *LI, ScalarEvolution &SE,
       // we had, so we don't want to unroll or peel again.
       if (PP.PeelProfiledIterations)
         L->setLoopAlreadyUnrolled();
-      Advice->recordUnattemptedUnrolling();
+      Instrument(Advice->recordUnattemptedUnrolling());
       return LoopUnrollResult::PartiallyUnrolled;
     }
-    Advice->recordUnattemptedUnrolling();
+    Instrument(Advice->recordUnattemptedUnrolling());
     return LoopUnrollResult::Unmodified;
   }
 
@@ -1289,7 +1296,7 @@ tryToUnrollLoop(Loop *L, DominatorTree &DT, LoopInfo *LI, ScalarEvolution &SE,
   if (OnlyFullUnroll && (UP.Count < TripCount || UP.Count < MaxTripCount)) {
     LLVM_DEBUG(
         dbgs() << "Not attempting partial/runtime unroll in FullLoopUnroll.\n");
-    Advice->recordUnattemptedUnrolling();
+    Instrument(Advice->recordUnattemptedUnrolling());
     return LoopUnrollResult::Unmodified;
   }
 
