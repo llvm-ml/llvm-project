@@ -26,13 +26,13 @@ def main(args):
             print(action)
             fc.readline()
             if args[2] == 'instrument':
-                f.write(bytes([1]))
+                tc.write(bytes([1]))
                 begin = ("test_loop_begin_" + str(self.counter)).encode('ascii') + bytes([0])
                 end = ("test_loop_end_" + str(self.counter)).encode('ascii') + bytes([0])
                 self.counter += 1
-                f.write(begin)
-                f.write(end)
-                f.flush()
+                tc.write(begin)
+                tc.write(end)
+                tc.flush()
             else:
                 # Respond that we do not want instrumentation
                 tc.write(bytes([0]))
