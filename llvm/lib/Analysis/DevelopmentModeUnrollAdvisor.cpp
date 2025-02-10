@@ -8,16 +8,20 @@
 //
 // The development advisor communicates over the channels in the following way:
 //
-// > is output
-// < is input
+// << is output
+// >> is input
 //
-// > {"observation" : <id : int>}
-// > feature tensor
-// > {"heuristic" : <id : int>}
-// > heuristic result : int64_t (i.e. unroll factor)
-// < Model Output
-// > {"action" : <id : int>}
-// > action result : uint8_t
+// << {"observation" : <id : int>}
+// << feature tensor : UnrollFeatureMap
+// << {"heuristic" : <id : int>}
+// << heuristic result : int64_t (i.e. unroll factor)
+// >> Model Output : UnrollDecisionSpec
+// << {"action" : <id : int>}
+// << action result : uint8_t
+// >> should_instrument : uint8_t
+// if should_instrument
+//   >> start_callback_name : cstring
+//   >> end_callback_name : cstring
 //
 //===----------------------------------------------------------------------===//
 
@@ -33,6 +37,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/FileSystem.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Cloning.h"
@@ -70,16 +75,79 @@ public:
   }
 
   void logHeuristic(std::optional<unsigned> UnrollFactor) {
-    if (UnrollFactor) {
-      Log->logCustom<uint64_t>("heuristic", *UnrollFactor);
-    } else {
-      Log->logCustom<uint64_t>("heuristic", 0);
-    }
+    uint64_t ToLog;
+    if (UnrollFactor)
+      ToLog = *UnrollFactor;
+    else
+      ToLog = 0;
+    LLVM_DEBUG(DBGS() << "Logging  " << ToLog << "\n");
+    Log->logCustom<uint64_t>("heuristic", ToLog);
     Log->flush();
   }
+
   void logAction(bool Unrolled) {
+    LLVM_DEBUG(DBGS() << "Logging action " << Unrolled << "\n");
     Log->logCustom<uint8_t>("action", Unrolled);
     Log->flush();
+  }
+
+  UnrollAdvice::InstrumentationInfo getInstrumentation() {
+    bool ShouldInstrument = read<uint8_t>();
+    LLVM_DEBUG(DBGS() << "ShouldInstrument " << ShouldInstrument << "\n");
+    if (!ShouldInstrument)
+      return std::nullopt;
+
+    auto BeginName = readString();
+    auto EndName = readString();
+
+    LLVM_DEBUG(DBGS() << "Instrumentation: " << BeginName << " " << EndName
+                      << "\n");
+
+    return UnrollAdvice::InstrumentationNames{BeginName, EndName};
+  }
+
+  std::string readString() {
+    std::vector<char> OutputBuffer;
+    while (true) {
+      char C;
+      auto ReadOrErr = ::sys::fs::readNativeFile(
+          sys::fs::convertFDToNativeFile(Inbound), {&C, 1});
+      if (ReadOrErr.takeError()) {
+        Ctx.emitError("Failed reading from inbound file");
+        OutputBuffer.back() = '\0';
+        break;
+      } else if (*ReadOrErr == 1) {
+        OutputBuffer.push_back(C);
+        if (C == '\0')
+          break;
+        else
+          continue;
+      } else if (*ReadOrErr == 0) {
+        continue;
+      }
+      llvm_unreachable("???");
+    }
+    return OutputBuffer.data();
+  }
+
+  template <typename T> T read() {
+    char Buff[sizeof(T)];
+    readRaw(Buff, sizeof(T));
+    return *reinterpret_cast<T *>(Buff);
+  }
+  void readRaw(char *Buff, size_t N) {
+    size_t InsPoint = 0;
+    const size_t Limit = N;
+    while (InsPoint < Limit) {
+      auto ReadOrErr =
+          ::sys::fs::readNativeFile(sys::fs::convertFDToNativeFile(Inbound),
+                                    {Buff + InsPoint, N - InsPoint});
+      if (ReadOrErr.takeError()) {
+        Ctx.emitError("Failed reading from inbound file");
+        break;
+      }
+      InsPoint += *ReadOrErr;
+    }
   }
 };
 
@@ -88,8 +156,14 @@ public:
   DevelopmentUnrollAdvisor() {}
   ~DevelopmentUnrollAdvisor() {}
 
-  void onAction() { getModelRunner()->logAction(true); }
-  void onNoAction() { getModelRunner()->logAction(false); }
+  UnrollAdvice::InstrumentationInfo onAction() {
+    getModelRunner()->logAction(true);
+    return getModelRunner()->getInstrumentation();
+  }
+  UnrollAdvice::InstrumentationInfo onNoAction() {
+    getModelRunner()->logAction(false);
+    return getModelRunner()->getInstrumentation();
+  }
 
 protected:
   std::unique_ptr<UnrollAdvice> getAdviceImpl(UnrollAdviceInfo UAI) override;
@@ -103,18 +177,18 @@ private:
 class DevelopmentUnrollAdvice : public UnrollAdvice {
 public:
   using UnrollAdvice::UnrollAdvice;
-  void recordUnrollingImpl() override {
+  UnrollAdvice::InstrumentationInfo recordUnrollingImpl() override {
     LLVM_DEBUG(DBGS() << "unrolled\n");
-    getAdvisor()->onAction();
+    return getAdvisor()->onAction();
   }
-  void
+  UnrollAdvice::InstrumentationInfo
   recordUnsuccessfulUnrollingImpl(const LoopUnrollResult &Result) override {
     LLVM_DEBUG(DBGS() << "unsuccessful unroll\n");
-    getAdvisor()->onNoAction();
+    return getAdvisor()->onNoAction();
   }
-  void recordUnattemptedUnrollingImpl() override {
+  UnrollAdvice::InstrumentationInfo recordUnattemptedUnrollingImpl() override {
     LLVM_DEBUG(DBGS() << "unattempted unroll\n");
-    getAdvisor()->onNoAction();
+    return getAdvisor()->onNoAction();
   }
 
 private:

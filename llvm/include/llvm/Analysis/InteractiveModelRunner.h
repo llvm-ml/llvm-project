@@ -58,15 +58,17 @@ public:
 
   virtual ~InteractiveModelRunner();
 
+protected:
+  // This must be declared before InEC if we want to initialize it in the
+  // ctor initializer list.
+  int Inbound = -1;
+
 private:
   void *evaluateUntyped() override {
     logInput();
     return getOutputUntyped();
   }
   void *getOutputUntyped();
-  // This must be declared before InEC if we want to initialize it in the
-  // ctor initializer list.
-  int Inbound = -1;
   const std::vector<TensorSpec> InputSpecs;
   const TensorSpec OutputSpec;
   std::error_code OutEC;
