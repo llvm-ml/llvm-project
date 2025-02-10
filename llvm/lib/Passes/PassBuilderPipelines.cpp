@@ -1483,6 +1483,8 @@ PassBuilder::buildModuleOptimizationPipeline(OptimizationLevel Level,
   if (EnableGlobalAnalyses)
     MPM.addPass(RecomputeGlobalsAAPass());
 
+  MPM.addPass(InputGenInstrumentMemoryPass());
+
   invokeOptimizerEarlyEPCallbacks(MPM, Level, LTOPhase);
 
   FunctionPassManager OptimizePM;
@@ -1645,6 +1647,8 @@ PassBuilder::buildPerModuleDefaultPipeline(OptimizationLevel Level,
 
   // Apply module pipeline start EP callback.
   invokePipelineStartEPCallbacks(MPM, Level);
+
+  MPM.addPass(InputGenInstrumentEntriesPass());
 
   // Add the core simplification pipeline.
   MPM.addPass(buildModuleSimplificationPipeline(Level, Phase));
