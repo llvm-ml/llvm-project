@@ -66,10 +66,6 @@ public:
 
   std::optional<unsigned> getRecommendedUnrollFactor() const { return Factor; }
 
-  static void instrument(UnrollAdvice::InstrumentationInfo Info,
-                         BasicBlock::iterator BeginIP,
-                         BasicBlock::iterator EndIP);
-
 protected:
   virtual InstrumentationInfo recordUnrollingImpl() { return std::nullopt; }
   virtual InstrumentationInfo
