@@ -125,20 +125,4 @@ UnrollAdvisor &getUnrollAdvisor() {
   return *Advisor;
 }
 
-void UnrollAdvice::instrument(UnrollAdvice::InstrumentationInfo Info,
-                              BasicBlock::iterator BeginIP,
-                              BasicBlock::iterator EndIP) {
-  if (!Info)
-    return;
-  Module &M = *BeginIP.getNodeParent()->getModule();
-  IRBuilder<> IRB(M.getContext());
-  FunctionCallee BeginF =
-      M.getOrInsertFunction(Info->BeginName, IRB.getVoidTy());
-  FunctionCallee EndF = M.getOrInsertFunction(Info->EndName, IRB.getVoidTy());
-  IRB.SetInsertPoint(BeginIP);
-  IRB.CreateCall(BeginF);
-  IRB.SetInsertPoint(EndIP);
-  IRB.CreateCall(EndF);
-}
-
 } // namespace llvm

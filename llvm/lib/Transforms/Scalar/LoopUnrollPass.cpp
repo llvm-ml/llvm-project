@@ -19,6 +19,7 @@
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/SmallVectorExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/BlockFrequencyInfo.h"
@@ -1246,12 +1247,37 @@ tryToUnrollLoop(Loop *L, DominatorTree &DT, LoopInfo *LI, ScalarEvolution &SE,
   // we want to also fully unroll from the same advice object.
   UnrollAdvisor &Advisor = getUnrollAdvisor();
   auto Advice = Advisor.getAdvice({TripCount, UCE, UP, SE, *LI, *L});
+  struct {
+    FunctionCallee BeginF;
+    FunctionCallee EndF;
+  } Instrumentation;
+  {
+    Module &M = *L->getHeader()->getModule();
+    SmallVector<BasicBlock *> ExitBlocks;
+    L->getExitBlocks(ExitBlocks);
+    IRBuilder<> IRB(M.getContext());
+    Instrumentation.BeginF = M.getOrInsertFunction("", IRB.getVoidTy());
+    Instrumentation.EndF = M.getOrInsertFunction("", IRB.getVoidTy());
+    IRB.SetInsertPoint(L->getLoopPreheader()->getTerminator()->getIterator());
+    IRB.CreateCall(Instrumentation.BeginF);
+    for (auto *BB : ExitBlocks) {
+      IRB.SetInsertPoint(BB->getFirstNonPHIOrDbgOrAlloca());
+      IRB.CreateCall(Instrumentation.EndF);
+    }
+  }
   auto Instrument = [&](UnrollAdvice::InstrumentationInfo Info) {
-    if (!Info)
+    if (!Info) {
+      auto Erase = [](FunctionCallee F) {
+        for (auto U : llvm::make_early_inc_range(F.getCallee()->users()))
+          cast<Instruction>(U)->eraseFromParent();
+        cast<Function>(F.getCallee())->eraseFromParent();
+      };
+      Erase(Instrumentation.BeginF);
+      Erase(Instrumentation.EndF);
       return;
-    UnrollAdvice::instrument(
-        Info, L->getLoopPreheader()->getTerminator()->getIterator(),
-        L->getExitBlock()->getFirstNonPHIOrDbgOrAlloca());
+    }
+    Instrumentation.BeginF.getCallee()->setName(Info->BeginName);
+    Instrumentation.EndF.getCallee()->setName(Info->EndName);
   };
 
   // computeUnrollCount() decides whether it is beneficial to use upper bound to
@@ -1325,7 +1351,7 @@ tryToUnrollLoop(Loop *L, DominatorTree &DT, LoopInfo *LI, ScalarEvolution &SE,
   LoopUnrollResult UnrollResult = UnrollLoop(
       L, ULO, LI, &SE, &DT, &AC, &TTI, &ORE, PreserveLCSSA, &RemainderLoop, AA);
   if (UnrollResult == LoopUnrollResult::Unmodified) {
-    Advice->recordUnsuccessfulUnrolling(UnrollResult);
+    Instrument(Advice->recordUnsuccessfulUnrolling(UnrollResult));
     return LoopUnrollResult::Unmodified;
   }
 
@@ -1346,7 +1372,7 @@ tryToUnrollLoop(Loop *L, DominatorTree &DT, LoopInfo *LI, ScalarEvolution &SE,
 
       // Do not setLoopAlreadyUnrolled if loop attributes have been specified
       // explicitly.
-      Advice->recordUnrolling(UnrollResult);
+      Instrument(Advice->recordUnrolling(UnrollResult));
       return UnrollResult;
     }
   }
@@ -1356,7 +1382,7 @@ tryToUnrollLoop(Loop *L, DominatorTree &DT, LoopInfo *LI, ScalarEvolution &SE,
   if (UnrollResult != LoopUnrollResult::FullyUnrolled && IsCountSetExplicitly)
     L->setLoopAlreadyUnrolled();
 
-  Advice->recordUnrolling(UnrollResult);
+  Instrument(Advice->recordUnrolling(UnrollResult));
   return UnrollResult;
 }
 
