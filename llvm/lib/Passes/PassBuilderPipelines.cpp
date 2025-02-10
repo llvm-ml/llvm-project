@@ -62,6 +62,7 @@
 #include "llvm/Transforms/IPO/IROutliner.h"
 #include "llvm/Transforms/IPO/InferFunctionAttrs.h"
 #include "llvm/Transforms/IPO/Inliner.h"
+#include "llvm/Transforms/IPO/InputGeneration.h"
 #include "llvm/Transforms/IPO/LowerTypeTests.h"
 #include "llvm/Transforms/IPO/MemProfContextDisambiguation.h"
 #include "llvm/Transforms/IPO/MergeFunctions.h"
@@ -1473,6 +1474,8 @@ PassBuilder::buildModuleOptimizationPipeline(OptimizationLevel Level,
   if (EnableGlobalAnalyses)
     MPM.addPass(RecomputeGlobalsAAPass());
 
+  MPM.addPass(InputGenInstrumentMemoryPass());
+
   invokeOptimizerEarlyEPCallbacks(MPM, Level, LTOPhase);
 
   FunctionPassManager OptimizePM;
@@ -1627,6 +1630,8 @@ PassBuilder::buildPerModuleDefaultPipeline(OptimizationLevel Level,
 
   // Apply module pipeline start EP callback.
   invokePipelineStartEPCallbacks(MPM, Level);
+
+  MPM.addPass(InputGenInstrumentEntriesPass());
 
   // Add the core simplification pipeline.
   MPM.addPass(buildModuleSimplificationPipeline(Level, Phase));
