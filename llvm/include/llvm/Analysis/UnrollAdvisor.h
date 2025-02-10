@@ -42,28 +42,39 @@ public:
                        "inliner's decision in all cases");
   }
 
-  void recordUnrolling(const LoopUnrollResult &Result) {
+  struct InstrumentationNames {
+    std::string BeginName, EndName;
+  };
+
+  using InstrumentationInfo = std::optional<InstrumentationNames>;
+
+  InstrumentationInfo recordUnrolling(const LoopUnrollResult &Result) {
     markRecorded();
-    recordUnrollingImpl();
+    return recordUnrollingImpl();
   }
 
-  void recordUnsuccessfulUnrolling(const LoopUnrollResult &Result) {
+  InstrumentationInfo
+  recordUnsuccessfulUnrolling(const LoopUnrollResult &Result) {
     markRecorded();
-    recordUnsuccessfulUnrollingImpl(Result);
+    return recordUnsuccessfulUnrollingImpl(Result);
   }
 
-  void recordUnattemptedUnrolling() {
+  InstrumentationInfo recordUnattemptedUnrolling() {
     markRecorded();
-    recordUnattemptedUnrollingImpl();
+    return recordUnattemptedUnrollingImpl();
   }
 
   std::optional<unsigned> getRecommendedUnrollFactor() const { return Factor; }
 
 protected:
-  virtual void recordUnrollingImpl() {}
-  virtual void recordUnsuccessfulUnrollingImpl(const LoopUnrollResult &Result) {
+  virtual InstrumentationInfo recordUnrollingImpl() { return std::nullopt; }
+  virtual InstrumentationInfo
+  recordUnsuccessfulUnrollingImpl(const LoopUnrollResult &Result) {
+    return std::nullopt;
   }
-  virtual void recordUnattemptedUnrollingImpl() {}
+  virtual InstrumentationInfo recordUnattemptedUnrollingImpl() {
+    return std::nullopt;
+  }
 
   UnrollAdvisor *const Advisor;
   const std::optional<unsigned> Factor;

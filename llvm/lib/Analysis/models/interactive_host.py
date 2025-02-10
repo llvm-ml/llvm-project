@@ -47,7 +47,7 @@ def send(f: io.BufferedWriter, value: Union[int, float], spec: log_reader.Tensor
 def run_interactive(
     temp_rootname: str,
     make_response: Callable[[List[log_reader.TensorValue]], Union[int, float, list]],
-    process_and_args: List[str], read_before_advice = None, read_after_advice = None
+    process_and_args: List[str], before_advice = None, after_advice = None
 ):
     """Host the compiler.
     Args:
@@ -97,11 +97,11 @@ def run_interactive(
                 for fv in features:
                     log_reader.pretty_print_tensor_value(fv)
                     tensor_values.append(fv)
-                if read_before_advice is not None:
-                    read_before_advice(fc)
+                if before_advice is not None:
+                    before_advice(tc, fc)
                 send(tc, make_response(tensor_values), advice_spec)
-                if read_after_advice is not None:
-                    read_after_advice(fc)
+                if after_advice is not None:
+                    after_advice(tc, fc)
         _, err = compiler_proc.communicate()
         print(err.decode("utf-8"))
         compiler_proc.wait()
