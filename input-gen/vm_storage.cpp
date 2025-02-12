@@ -128,8 +128,7 @@ void StorageManager::write(std::ofstream &ofs) {
     Ptr.write(ofs);
 }
 
-void *StorageManager::read(std::string_view FileName) {
-  std::ifstream IFS(FileName.data(), std::ios_base::in | std::ios_base::binary);
+void *StorageManager::read(std::ifstream &IFS) {
   const int BufferSize = 65536; // Example: 64KB
   char *Buffer = new char[BufferSize];
   IFS.rdbuf()->pubsetbuf(Buffer, BufferSize);

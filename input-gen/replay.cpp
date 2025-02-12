@@ -27,7 +27,8 @@ int main(int argc, char **argv) {
   {
     Timer T("init");
     StorageManager SM;
-    P = SM.read(argv[1]);
+    std::ifstream IFS(argv[1], std::ios_base::in | std::ios_base::binary);
+    P = SM.read(IFS);
   }
   {
     Timer T("replay");

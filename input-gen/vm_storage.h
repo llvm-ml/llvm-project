@@ -44,6 +44,6 @@ struct StorageManager {
   void encode(ObjectManager &OM, uint32_t ObjIdx,
               TableSchemeBaseTy::TableEntryTy &TE);
 
-  void *read(std::string_view FileName);
+  void *read(std::ifstream &ifs);
   void write(std::ofstream &ofs);
 };
