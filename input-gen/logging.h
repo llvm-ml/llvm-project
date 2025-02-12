@@ -19,6 +19,13 @@ void VERBOSE(const std::format_string<Args...> S, Args &&...As) {
 }
 
 template <typename... Args>
+void DEBUG(const std::format_string<Args...> S, Args &&...As) {
+#ifndef NDEBUG
+  std::cerr << std::format(S, std::forward<Args>(As)...);
+#endif
+}
+
+template <typename... Args>
 void WARN(const std::format_string<Args...> S, Args &&...As) {
 #ifndef NDEBUG
   std::cerr << std::format(S, std::forward<Args>(As)...);
