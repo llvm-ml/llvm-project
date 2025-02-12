@@ -125,7 +125,6 @@ private:
   FunctionAnalysisManager &FAM;
   InputGenInstrumentationConfig IConf;
   const DataLayout &DL = M.getDataLayout();
-  SmallVector<Function *> UserFunctions;
 };
 
 struct InputGenEntriesImpl {
@@ -463,10 +462,6 @@ bool InputGenMemoryImpl::shouldInstrumentCall(CallInst &CI) {
 bool InputGenMemoryImpl::instrument() {
   bool Changed = false;
 
-  for (auto &Fn : M.functions())
-    if (Fn.hasFnAttribute(Attribute::InputGenEntry))
-      UserFunctions.push_back(&Fn);
-
   InstrumentorPass IP(&IConf);
 
   auto PA = IP.run(M, MAM);
@@ -502,6 +497,7 @@ bool InputGenEntriesImpl::createEntryPoint() {
       FunctionType::get(Type::getVoidTy(Ctx), {I32Ty, PtrTy}, false),
       GlobalValue::ExternalLinkage,
       std::string(InputGenRuntimePrefix) + "entry", M);
+  IGEntry->addFnAttr("instrument");
 
   auto *EntryChoice = IGEntry->getArg(0);
   auto *InitialObj = IGEntry->getArg(1);
