@@ -14,10 +14,12 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Transforms/IPO/InputGeneration.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Transforms/IPO/InputGenerationImpl.h"
 
 using namespace llvm;
@@ -37,19 +39,65 @@ namespace llvm {
 using EI = InputGenEntryInstrumenter;
 using MI = InputGenMemoryInstrumenter;
 
-void EI::instrumentFunction(Module &M, Function &F) {
-  // TODO
+std::string EI::getPrefix() const {
+  switch (Mode) {
+  case IGIMode::Generate:
+    return "__inputgen_generate_";
+  case IGIMode::Replay:
+    return "__inputgen_replay_";
+  case IGIMode::Record:
+  default:
+    llvm_unreachable("");
+  }
 }
 
-void EI::instrumentAll(Module &M) {
-  SmallVector<Function *> ToInstrument;
-  for (Function &F : M)
-    ToInstrument.push_back(&F);
-  for (Function *F : ToInstrument)
-    instrumentFunction(M, *F);
+void EI::preprocessModule() {
+  switch (Mode) {
+  case IGIMode::Generate:
+    removeTokenFunctions();
+
+  case IGIMode::Replay:
+
+  case IGIMode::Record:
+  default:
+    llvm_unreachable("");
+  }
+}
+
+void EI::renameGlobals(Module &M, TargetLibraryInfo &TLI) {
+  // Some modules define their own 'malloc' etc. or make aliases to existing
+  // functions. We do not want them to override any definition that we depend
+  // on in our runtime, thus, rename all globals.
+  auto Rename = [](auto &S) {
+    if (!S.isDeclaration())
+      S.setName("__inputgen_renamed_" + S.getName());
+  };
+  for (auto &X : M.globals()) {
+    X.setComdat(nullptr);
+    if (IGI.shouldPreserveGVName(X))
+      continue;
+    if (X.getValueType()->isSized())
+      X.setLinkage(GlobalVariable::InternalLinkage);
+    Rename(X);
+  }
+  for (auto &X : M.functions()) {
+    X.setComdat(nullptr);
+    if (IGI.shouldPreserveFuncName(X, TLI))
+      continue;
+    Rename(X);
+  }
+  for (auto &X : M.ifuncs()) {
+    X.setComdat(nullptr);
+    Rename(X);
+  }
+  for (auto &X : M.aliases())
+    Rename(X);
 }
 
 bool EI::instrumentMarkedEntries(Module &M) {
+
+  preprocessModule(M);
+
   SmallVector<Function *> ToInstrument;
   for (Function &F : M)
     if (F.hasFnAttribute(llvm::Attribute::InputGenEntry))
