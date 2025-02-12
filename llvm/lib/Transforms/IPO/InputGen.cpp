@@ -252,7 +252,7 @@ BranchConditionIO::analyzeBranch(BranchInst &BI,
   auto AdjustIP = [&](Instruction *I) {
     if (!IP || DT.dominates(IP, I)) {
       if (isa<PHINode>(I))
-        IP = I->getParent()->getFirstNonPHIOrDbgOrLifetime();
+        IP = &*I->getParent()->getFirstNonPHIOrDbgOrLifetime();
       else
         IP = I->getNextNode();
       return;

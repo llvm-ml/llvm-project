@@ -6,6 +6,7 @@
 #include <cstring>
 #include <stdint.h>
 #include <stdio.h>
+#include <functional>
 
 #include "vm_obj.h"
 
