@@ -80,8 +80,8 @@ int main(int argc, char **argv) {
 
   if (ClStripDebugInfo)
     StripDebugInfo(*M);
-  if (ClStripUnknownOperandBundles)
-    stripUnknownOperandBundles(*M);
+  // if (ClStripUnknownOperandBundles)
+  //   stripUnknownOperandBundles(*M);
 
   InputGenOrchestration IGO(argv[0], *M);
 

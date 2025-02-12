@@ -920,6 +920,7 @@ Function *CodeExtractor::constructFunctionDeclaration(
       case Attribute::NoFPClass:
       case Attribute::CoroDestroyOnlyWhenComplete:
       case Attribute::CoroElideSafe:
+      case Attribute::InputGenEntry:
       case Attribute::NoDivergenceSource:
         continue;
       // Those attributes should be safe to propagate to the extracted function.
