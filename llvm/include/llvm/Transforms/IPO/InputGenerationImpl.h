@@ -28,19 +28,19 @@ enum class IGIMode : unsigned { Record, Generate, Replay, Disabled };
 /// replaying.
 class InputGenEntryInstrumenter {
 public:
-  InputGenEntryInstrumenter(IGIMode Mode) : Mode(Mode) {}
-
-  /// Instruments only a specific function.
-  void instrumentFunction(Module &M, Function &F);
+  InputGenEntryInstrumenter(Module &M, IGIMode Mode) : M(M), Mode(Mode) {}
 
   /// Instruments functions marked by the inputgen_entry attribute.
   bool instrumentMarkedEntries(Module &M);
 
-  /// Instruments all functions.
-  void instrumentAll(Module &M);
+  void preprocessModule();
+  void declareProbeStackFuncs();
 
 private:
-  IGIMode Mode;
+  Module &M;
+  const IGIMode Mode;
+
+  std::string getPrefix() const;
 };
 
 /// Instruments the memory effects of all functions with prepared by
