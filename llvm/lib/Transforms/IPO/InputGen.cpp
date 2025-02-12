@@ -502,7 +502,6 @@ bool InputGenEntriesImpl::createEntryPoint() {
       FunctionType::get(Type::getVoidTy(Ctx), {I32Ty, PtrTy}, false),
       GlobalValue::ExternalLinkage,
       std::string(InputGenRuntimePrefix) + "entry", M);
-  IGEntry->addFnAttr("instrument");
 
   auto *EntryChoice = IGEntry->getArg(0);
   auto *InitialObj = IGEntry->getArg(1);
@@ -609,36 +608,47 @@ void InputGenInstrumentationConfig::populate(LLVMContext &Ctx) {
 
 PreservedAnalyses
 InputGenInstrumentEntriesPass::run(Module &M, AnalysisManager<Module> &MAM) {
-  if (ClInstrumentationMode == IGIMode::Disabled)
+  switch (ClInstrumentationMode) {
+  default:
     return PreservedAnalyses::all();
 
-  InputGenEntriesImpl Impl(M, MAM);
+  case IGIMode::Generate:
+  case IGIMode::Replay: {
 
-  bool Changed = Impl.instrument();
-  if (!Changed)
-    return PreservedAnalyses::all();
+    InputGenEntriesImpl Impl(M, MAM);
 
-  if (verifyModule(M))
-    M.dump();
-  assert(!verifyModule(M, &errs()));
+    bool Changed = Impl.instrument();
+    if (!Changed)
+      return PreservedAnalyses::all();
 
-  return PreservedAnalyses::none();
+    if (verifyModule(M))
+      M.dump();
+    assert(!verifyModule(M, &errs()));
+
+    return PreservedAnalyses::none();
+  }
+  }
 }
 
 PreservedAnalyses
 InputGenInstrumentMemoryPass::run(Module &M, AnalysisManager<Module> &MAM) {
-  if (ClInstrumentationMode == IGIMode::Disabled)
+  switch (ClInstrumentationMode) {
+  default:
     return PreservedAnalyses::all();
 
-  InputGenMemoryImpl Impl(M, MAM);
+  case IGIMode::Generate: {
 
-  bool Changed = Impl.instrument();
-  if (!Changed)
-    return PreservedAnalyses::all();
+    InputGenMemoryImpl Impl(M, MAM);
 
-  if (verifyModule(M))
-    M.dump();
-  assert(!verifyModule(M, &errs()));
+    bool Changed = Impl.instrument();
+    if (!Changed)
+      return PreservedAnalyses::all();
 
-  return PreservedAnalyses::none();
+    if (verifyModule(M))
+      M.dump();
+    assert(!verifyModule(M, &errs()));
+
+    return PreservedAnalyses::none();
+  }
+  }
 }

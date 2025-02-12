@@ -8,6 +8,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <condition_variable>
 
 extern "C" uint32_t __ig_num_entry_points;
 extern "C" void __ig_entry(uint32_t, void *);

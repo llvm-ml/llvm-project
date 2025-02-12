@@ -19,6 +19,7 @@
 #include <sys/types.h>
 #include <tuple>
 #include <type_traits>
+#include <functional>
 
 #include "vm_choices.h"
 #include "vm_enc.h"
