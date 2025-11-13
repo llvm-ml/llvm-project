@@ -172,6 +172,9 @@ UnrollAdvisor &getUnrollAdvisor(LLVMContext &Ctx) {
   // only be used to emit errors so it should be fine.
   static std::unique_ptr<UnrollAdvisor> Advisor =
       [&Ctx]() -> std::unique_ptr<UnrollAdvisor> {
+    char *ModelPathEnv = getenv("LLVM_TFLITE_UNROLLMODEL_PATH");
+    if (ModelPathEnv)
+      return getReleaseModeUnrollAdvisor(Ctx);
     switch (ClUnrollAdvisorMode) {
     case UnrollAdvisorMode::Default:
       return getDefaultModeUnrollAdvisor(Ctx);
